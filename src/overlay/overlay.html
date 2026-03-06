@@ -1,4 +1,37 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>LoLProxChat</title>
-<link rel="stylesheet" href="overlay.css"></head>
-<body><div id="proxchat-root"></div><script src="overlay.js"></script></body></html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LoLProxChat</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div id="proxchat-root" class="proxchat-widget">
+    <div id="drag-handle" class="widget-header">
+      <span class="widget-title">ProxChat</span>
+      <div class="header-controls">
+        <button id="btn-self-mute" class="icon-btn" title="Toggle Self Mute">MIC</button>
+        <button id="btn-mute-all" class="icon-btn" title="Mute All">VOL</button>
+        <button id="btn-settings" class="icon-btn" title="Settings">SET</button>
+      </div>
+    </div>
+    <div id="player-list" class="player-list">
+      <div class="empty-state">Waiting for nearby players...</div>
+    </div>
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="setting-row">
+        <label>Input Mode</label>
+        <select id="input-mode">
+          <option value="vad">Voice Activity</option>
+          <option value="ptt">Push to Talk</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>Input Volume</label>
+        <input id="input-volume" type="range" min="0" max="100" value="100">
+      </div>
+    </div>
+  </div>
+  <script src="overlay.js"></script>
+</body>
+</html>
