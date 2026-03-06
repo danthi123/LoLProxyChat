@@ -87,12 +87,14 @@ export class TrackingService {
   }
 
   onDeath(): void {
+    if (this.state === TrackingState.DEAD) return;
     this.deathPosition = this.lastPosition;
     this.state = TrackingState.DEAD;
     console.log('[Tracking] DEAD at', this.deathPosition);
   }
 
   onRespawn(): void {
+    if (this.state !== TrackingState.DEAD) return;
     this.state = TrackingState.SCANNING;
     this.trackingTemplate = null;
     this.lastPixelPos = null;
