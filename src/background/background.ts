@@ -43,9 +43,15 @@ function onInfoUpdate(info: any): void {
 }
 
 overwolf.games.onGameInfoUpdated.addListener((event) => {
-  if (event.gameInfo?.isRunning && event.gameInfo.classId === 5426) {
-    console.log('League of Legends detected - starting GEP');
-    gep.start(onGameEvent, onInfoUpdate);
+  if (event.gameInfo?.classId === 5426) {
+    if (event.gameInfo.isRunning) {
+      console.log('League of Legends detected - starting GEP');
+      gep.start(onGameEvent, onInfoUpdate);
+    } else {
+      console.log('League of Legends closed - stopping GEP');
+      gep.stop();
+      gameState.clearSession();
+    }
   }
 });
 

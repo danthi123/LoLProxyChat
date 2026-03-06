@@ -18,24 +18,32 @@ export class GEPService {
   private onInfoUpdate: InfoUpdateCallback | null = null;
   private retryCount = 0;
   private readonly maxRetries = 10;
+  private newEventsListener: ((e: any) => void) | null = null;
+  private infoUpdatesListener: ((info: any) => void) | null = null;
 
   start(onGameEvent: GameEventCallback, onInfoUpdate: InfoUpdateCallback): void {
+    // Guard against duplicate listeners by cleaning up any existing ones first
+    this.stop();
+
     this.onGameEvent = onGameEvent;
     this.onInfoUpdate = onInfoUpdate;
 
-    overwolf.games.events.onNewEvents.addListener((e) => {
+    this.newEventsListener = (e) => {
       if (this.onGameEvent) {
         for (const event of e.events) {
           this.onGameEvent(event.name, event.data);
         }
       }
-    });
+    };
 
-    overwolf.games.events.onInfoUpdates2.addListener((info) => {
+    this.infoUpdatesListener = (info) => {
       if (this.onInfoUpdate) {
         this.onInfoUpdate(info);
       }
-    });
+    };
+
+    overwolf.games.events.onNewEvents.addListener(this.newEventsListener);
+    overwolf.games.events.onInfoUpdates2.addListener(this.infoUpdatesListener);
 
     this.registerFeatures();
   }
@@ -58,7 +66,15 @@ export class GEPService {
   }
 
   stop(): void {
-    overwolf.games.events.onNewEvents.removeListener(() => {});
-    overwolf.games.events.onInfoUpdates2.removeListener(() => {});
+    if (this.newEventsListener) {
+      overwolf.games.events.onNewEvents.removeListener(this.newEventsListener);
+      this.newEventsListener = null;
+    }
+    if (this.infoUpdatesListener) {
+      overwolf.games.events.onInfoUpdates2.removeListener(this.infoUpdatesListener);
+      this.infoUpdatesListener = null;
+    }
+    this.onGameEvent = null;
+    this.onInfoUpdate = null;
   }
 }
