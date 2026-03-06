@@ -17,6 +17,12 @@ interface TemplateData {
   skins: number[][]; // each skin is a flat RGB array with -1 for masked pixels
 }
 
+interface PreparedTemplate {
+  data: Int16Array;
+  mask: boolean[];
+}
+
+
 export class TrackingService {
   private state: TrackingState = TrackingState.SCANNING;
   private canvas: HTMLCanvasElement;
@@ -28,6 +34,7 @@ export class TrackingService {
 
   // Template matching
   private coldStartTemplate: TemplateData | null = null;
+  private preparedTemplates: PreparedTemplate[] = [];
   private trackingTemplate: Uint8ClampedArray | null = null;
   private trackingTemplateSize = 0;
 
@@ -68,6 +75,11 @@ export class TrackingService {
     const templateEntry = data.templates?.[championName];
     if (templateEntry) {
       this.coldStartTemplate = templateEntry;
+      const numPixels = templateEntry.size * templateEntry.size;
+      this.preparedTemplates = templateEntry.skins.map((skin: number[]) => ({
+        data: new Int16Array(skin),
+        mask: buildMask(skin, numPixels),
+      }));
       console.log('[Tracking] Loaded template:', championName,
         'skins:', templateEntry.skins.length, 'size:', templateEntry.size);
     } else {
@@ -195,11 +207,10 @@ export class TrackingService {
         const portrait = this.extractSectorPortrait(imageData, sx, sy, sectorSize);
         if (!portrait) continue;
 
-        for (const skinTemplate of this.coldStartTemplate.skins) {
-          const templateSize = this.coldStartTemplate.size;
-          const numPixels = templateSize * templateSize;
-          const mask = buildMask(skinTemplate, numPixels);
-          const score = normalizedCrossCorrelation(portrait, new Int16Array(skinTemplate), mask, numPixels);
+        const templateSize = this.coldStartTemplate.size;
+        const numPixels = templateSize * templateSize;
+        for (const prepared of this.preparedTemplates) {
+          const score = normalizedCrossCorrelation(portrait, prepared.data, prepared.mask, numPixels);
 
           if (score > bestScore) {
             bestScore = score;
