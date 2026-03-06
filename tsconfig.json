@@ -9,7 +9,8 @@
     "rootDir": "./src",
     "sourceMap": true,
     "declaration": false,
-    "lib": ["ES2020", "DOM"]
+    "lib": ["ES2020", "DOM"],
+    "types": ["@overwolf/types", "jest"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
