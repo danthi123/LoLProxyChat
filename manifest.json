@@ -1,0 +1,68 @@
+{
+  "manifest_version": 1,
+  "type": "WebApp",
+  "meta": {
+    "name": "LoLProxChat",
+    "author": "LoLProxChat",
+    "version": "0.1.0",
+    "minimum-overwolf-version": "0.230.0",
+    "minimum-gep-version": "0.230.0",
+    "description": "Proximity voice chat for League of Legends",
+    "dock_button_title": "ProxChat",
+    "icon": "icons/IconMouseOver.png",
+    "icon_gray": "icons/IconMouseNormal.png"
+  },
+  "permissions": ["GameInfo", "Streaming", "Hotkeys", "Media"],
+  "data": {
+    "game_targeting": {
+      "type": "dedicated",
+      "game_ids": [5426]
+    },
+    "start_window": "background",
+    "enable_top_isolation": true,
+    "windows": {
+      "background": {
+        "file": "background/background.html",
+        "is_background_page": true,
+        "show_in_taskbar": false
+      },
+      "overlay": {
+        "file": "overlay/overlay.html",
+        "transparent": true,
+        "resizable": false,
+        "clickthrough": true,
+        "in_game_only": true,
+        "topmost": true,
+        "size": {
+          "width": 280,
+          "height": 400
+        },
+        "start_position": {
+          "left": 10,
+          "bottom": 200
+        },
+        "style": "inputPassThrough"
+      }
+    },
+    "hotkeys": {
+      "push_to_talk": {
+        "title": "Push to Talk",
+        "action-type": "hold",
+        "default": "V"
+      },
+      "toggle_mute": {
+        "title": "Toggle Self Mute",
+        "action-type": "toggle",
+        "default": "M"
+      }
+    },
+    "launch_events": [
+      {
+        "event": "GameLaunch",
+        "event_data": {
+          "game_ids": [5426]
+        }
+      }
+    ]
+  }
+}
