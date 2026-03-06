@@ -1,15 +1,12 @@
 import { PeerConnection } from './peer-connection';
 import { SignalingService, SignalMessage } from './signaling';
-import { calculateDistance, calculateVolume, isInRange } from '../core/proximity';
-import { Position, PeerState, AudioSettings } from '../core/types';
+import { AudioSettings } from '../core/types';
 
 export class AudioService {
   private localStream: MediaStream | null = null;
   private peers: Map<string, PeerConnection> = new Map();
-  private peerPositions: Map<string, PeerState> = new Map();
   private signaling: SignalingService;
   private localName: string;
-  localPosition: Position = { x: 0, y: 0 };
   private selfMuted = false;
   private muteAll = false;
   private mutedPlayers: Set<string> = new Set();
@@ -56,6 +53,10 @@ export class AudioService {
     const destination = this.audioContext.createMediaStreamDestination();
     this.gainNode.connect(destination);
     this.outputStream = destination.stream;
+    // Ensure output tracks start enabled
+    for (const track of this.outputStream.getAudioTracks()) {
+      track.enabled = true;
+    }
   }
 
   private isTransmitting(): boolean {
@@ -70,28 +71,44 @@ export class AudioService {
   }
 
   private updateLocalTrackState(): void {
-    if (!this.localStream) return;
+    if (!this.outputStream) return;
     const enabled = !this.selfMuted && this.isTransmitting();
-    for (const track of this.localStream.getAudioTracks()) {
+    // Disable/enable on outputStream tracks (what peers actually receive)
+    for (const track of this.outputStream.getAudioTracks()) {
       track.enabled = enabled;
     }
   }
 
   // Called periodically (~20 times/sec) to check voice activity
+  private vadLogCounter = 0;
   updateVAD(): void {
     if (this.settings.inputMode !== 'vad' || !this.analyser) return;
     const data = new Uint8Array(this.analyser.frequencyBinCount);
     this.analyser.getByteFrequencyData(data);
     const average = data.reduce((sum, val) => sum + val, 0) / data.length;
-    const threshold = 30;
+    const threshold = 15; // Lower threshold for easier voice detection
+    const wasActive = this.vadActive;
     this.vadActive = average > threshold;
-    this.updateLocalTrackState();
+    this.vadLogCounter++;
+    // Log VAD state every ~5 seconds (100 calls at 20/sec)
+    if (this.vadLogCounter % 100 === 0) {
+      console.log('[Audio] VAD: avg=' + average.toFixed(1) + ' active=' + this.vadActive +
+        ' transmitting=' + this.isTransmitting() + ' selfMuted=' + this.selfMuted +
+        ' mode=' + this.settings.inputMode +
+        ' outputTracks=' + (this.outputStream?.getAudioTracks().length ?? 0) +
+        ' tracksEnabled=' + (this.outputStream?.getAudioTracks().map(t => t.enabled).join(',') ?? 'none'));
+    }
+    // Only update track state when VAD state changes to reduce toggling
+    if (this.vadActive !== wasActive) {
+      this.updateLocalTrackState();
+    }
   }
 
   // Connect to a new peer
   async connectToPeer(remoteName: string): Promise<void> {
     if (this.peers.has(remoteName)) return;
 
+    console.log('[Audio] Connecting to peer:', remoteName);
     const peer = new PeerConnection(remoteName);
     this.peers.set(remoteName, peer);
 
@@ -110,46 +127,58 @@ export class AudioService {
 
     // Alphabetically first name creates the offer (deterministic initiator)
     if (this.localName < remoteName) {
-      const offer = await peer.createOffer();
-      this.signaling.sendSignal({
-        type: 'offer',
-        from: this.localName,
-        to: remoteName,
-        payload: offer,
-      });
+      console.log('[Audio] Creating offer (initiator) to:', remoteName);
+      try {
+        const offer = await peer.createOffer();
+        this.signaling.sendSignal({
+          type: 'offer',
+          from: this.localName,
+          to: remoteName,
+          payload: offer,
+        });
+      } catch (e) {
+        console.error('[Audio] Failed to create offer for:', remoteName, e);
+        this.peers.delete(remoteName);
+        peer.close();
+      }
     }
   }
 
   // Handle incoming WebRTC signals
   async handleSignal(signal: SignalMessage): Promise<void> {
-    let peer = this.peers.get(signal.from);
+    console.log('[Audio] Received signal:', signal.type, 'from:', signal.from);
+    try {
+      let peer = this.peers.get(signal.from);
 
-    if (signal.type === 'offer') {
-      if (!peer) {
-        peer = new PeerConnection(signal.from);
-        this.peers.set(signal.from, peer);
-        if (this.outputStream) peer.addLocalStream(this.outputStream);
+      if (signal.type === 'offer') {
+        if (!peer) {
+          peer = new PeerConnection(signal.from);
+          this.peers.set(signal.from, peer);
+          if (this.outputStream) peer.addLocalStream(this.outputStream);
 
-        peer.onIceCandidate = (candidate) => {
-          this.signaling.sendSignal({
-            type: 'ice-candidate',
-            from: this.localName,
-            to: signal.from,
-            payload: candidate.toJSON(),
-          });
-        };
+          peer.onIceCandidate = (candidate) => {
+            this.signaling.sendSignal({
+              type: 'ice-candidate',
+              from: this.localName,
+              to: signal.from,
+              payload: candidate.toJSON(),
+            });
+          };
+        }
+        const answer = await peer.handleOffer(signal.payload);
+        this.signaling.sendSignal({
+          type: 'answer',
+          from: this.localName,
+          to: signal.from,
+          payload: answer,
+        });
+      } else if (signal.type === 'answer' && peer) {
+        await peer.handleAnswer(signal.payload);
+      } else if (signal.type === 'ice-candidate' && peer) {
+        await peer.addIceCandidate(signal.payload);
       }
-      const answer = await peer.handleOffer(signal.payload);
-      this.signaling.sendSignal({
-        type: 'answer',
-        from: this.localName,
-        to: signal.from,
-        payload: answer,
-      });
-    } else if (signal.type === 'answer' && peer) {
-      await peer.handleAnswer(signal.payload);
-    } else if (signal.type === 'ice-candidate' && peer) {
-      await peer.addIceCandidate(signal.payload);
+    } catch (e) {
+      console.error('[Audio] Signal handling failed:', signal.type, 'from:', signal.from, e);
     }
   }
 
@@ -159,52 +188,24 @@ export class AudioService {
       peer.close();
       this.peers.delete(remoteName);
     }
-    this.peerPositions.delete(remoteName);
   }
 
-  // Position & volume updates
-  updateLocalPosition(position: Position): void {
-    this.localPosition = position;
-    this.updateAllVolumes();
-  }
-
-  updatePeerState(state: PeerState): void {
-    this.peerPositions.set(state.summonerName, state);
-    this.updatePeerVolume(state.summonerName);
-  }
-
-  private updateAllVolumes(): void {
-    for (const [name] of this.peerPositions) {
-      this.updatePeerVolume(name);
-    }
-  }
-
-  private updatePeerVolume(remoteName: string): void {
-    const peer = this.peers.get(remoteName);
-    const peerState = this.peerPositions.get(remoteName);
-    if (!peer || !peerState) return;
-
-    if (this.muteAll || this.mutedPlayers.has(remoteName)) {
-      peer.mute();
-      return;
-    }
-
-    const distance = calculateDistance(this.localPosition, peerState.position);
-    const proximityVolume = calculateVolume(distance);
-    const playerVolume = this.settings.playerVolumes[remoteName] ?? 1.0;
-    peer.setVolume(proximityVolume * playerVolume);
-    peer.unmute();
-  }
-
-  // Vision-based cutoff for enemies
-  setEnemyVisible(remoteName: string, visible: boolean): void {
-    const peer = this.peers.get(remoteName);
-    if (!peer) return;
-    if (!visible) {
-      peer.mute();
-    } else if (!this.muteAll && !this.mutedPlayers.has(remoteName)) {
-      peer.unmute();
-      this.updatePeerVolume(remoteName);
+  applyPeerVolumes(volumes: Record<string, number>): void {
+    for (const [name, volume] of Object.entries(volumes)) {
+      const peer = this.peers.get(name);
+      if (!peer) continue;
+      if (this.muteAll || this.mutedPlayers.has(name)) {
+        peer.mute();
+        continue;
+      }
+      const playerVolume = this.settings.playerVolumes[name] ?? 1.0;
+      const finalVol = volume * playerVolume;
+      peer.setVolume(finalVol);
+      if (finalVol > 0) {
+        peer.unmute();
+      } else {
+        peer.mute();
+      }
     }
   }
 
@@ -217,7 +218,13 @@ export class AudioService {
 
   toggleMuteAll(): boolean {
     this.muteAll = !this.muteAll;
-    this.updateAllVolumes();
+    for (const [, peer] of this.peers) {
+      if (this.muteAll) {
+        peer.mute();
+      } else {
+        peer.unmute();
+      }
+    }
     return this.muteAll;
   }
 
@@ -227,7 +234,14 @@ export class AudioService {
     } else {
       this.mutedPlayers.add(name);
     }
-    this.updatePeerVolume(name);
+    const peer = this.peers.get(name);
+    if (peer) {
+      if (this.mutedPlayers.has(name)) {
+        peer.mute();
+      } else {
+        peer.unmute();
+      }
+    }
     return this.mutedPlayers.has(name);
   }
 
@@ -239,7 +253,6 @@ export class AudioService {
     Object.assign(this.settings, settings);
     this.applyInputVolume();
     this.updateLocalTrackState();
-    this.updateAllVolumes();
   }
 
   private applyInputVolume(): void {
@@ -253,7 +266,6 @@ export class AudioService {
       peer.close();
     }
     this.peers.clear();
-    this.peerPositions.clear();
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.audioContext?.close();
