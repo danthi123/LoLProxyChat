@@ -22,4 +22,18 @@ overwolf.windows.onMessageReceived.addListener((message: any) => {
   }
 });
 
+// PTT hotkey (hold)
+overwolf.settings.hotkeys.onHold.addListener((event: any) => {
+  if (event.name === 'push_to_talk') {
+    orchestrator.setPTTState(event.state === 'down');
+  }
+});
+
+// Toggle mute hotkey
+overwolf.settings.hotkeys.onPressed.addListener((event: any) => {
+  if (event.name === 'toggle_mute') {
+    orchestrator.toggleSelfMute();
+  }
+});
+
 console.log('LoLProxChat background service started');
