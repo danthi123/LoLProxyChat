@@ -4,9 +4,11 @@ export class PeerConnection {
   private pc: RTCPeerConnection;
   private remoteStream: MediaStream = new MediaStream();
   private audioElement: HTMLAudioElement;
+  private dataChannel: RTCDataChannel | null = null;
   readonly remoteName: string;
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
+  onDataMessage: ((data: string) => void) | null = null;
 
   constructor(remoteName: string) {
     this.remoteName = remoteName;
@@ -23,8 +25,44 @@ export class PeerConnection {
     };
 
     this.pc.ontrack = (event) => {
+      console.log('[WebRTC] Got remote track from', remoteName, 'kind:', event.track.kind);
       this.remoteStream.addTrack(event.track);
+      // Ensure audio plays (autoplay may be blocked)
+      this.audioElement.play().catch((e) => {
+        console.warn('[WebRTC] Audio play failed for', remoteName, ':', e);
+      });
     };
+
+    this.pc.onconnectionstatechange = () => {
+      console.log('[WebRTC] Connection state with', remoteName, ':', this.pc.connectionState);
+    };
+
+    this.pc.oniceconnectionstatechange = () => {
+      console.log('[WebRTC] ICE state with', remoteName, ':', this.pc.iceConnectionState);
+    };
+
+    this.pc.ondatachannel = (event) => {
+      this.dataChannel = event.channel;
+      this.setupDataChannel();
+    };
+  }
+
+  private setupDataChannel(): void {
+    if (!this.dataChannel) return;
+    this.dataChannel.onmessage = (event) => {
+      if (this.onDataMessage) this.onDataMessage(event.data);
+    };
+  }
+
+  createDataChannel(): void {
+    this.dataChannel = this.pc.createDataChannel('position', { ordered: false, maxRetransmits: 0 });
+    this.setupDataChannel();
+  }
+
+  sendData(data: string): void {
+    if (this.dataChannel?.readyState === 'open') {
+      this.dataChannel.send(data);
+    }
   }
 
   addLocalStream(stream: MediaStream): void {
@@ -67,6 +105,7 @@ export class PeerConnection {
   }
 
   close(): void {
+    this.dataChannel?.close();
     this.pc.close();
     this.audioElement.pause();
     this.audioElement.srcObject = null;
