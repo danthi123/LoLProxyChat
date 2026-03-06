@@ -249,6 +249,14 @@ export class AudioService {
   isMuteAll(): boolean { return this.muteAll; }
   isPlayerMuted(name: string): boolean { return this.mutedPlayers.has(name); }
 
+  getPeer(name: string): PeerConnection | undefined {
+    return this.peers.get(name);
+  }
+
+  hasPeer(name: string): boolean {
+    return this.peers.has(name);
+  }
+
   updateSettings(settings: Partial<AudioSettings>): void {
     Object.assign(this.settings, settings);
     this.applyInputVolume();
