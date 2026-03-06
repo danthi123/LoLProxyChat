@@ -1,4 +1,4 @@
-import { normalizedCrossCorrelation, buildMask } from '../../src/core/template-match';
+import { normalizedCrossCorrelation, buildMask, findBestMatch } from '../../src/core/template-match';
 
 describe('normalizedCrossCorrelation', () => {
   test('returns 1.0 for identical patches', () => {
@@ -58,5 +58,51 @@ describe('buildMask', () => {
   test('returns empty array for zero pixels', () => {
     const mask = buildMask([], 0);
     expect(mask).toEqual([]);
+  });
+});
+
+describe('findBestMatch', () => {
+  test('finds template at correct offset in search window', () => {
+    // Create a 10x10 "image" with a known 3x3 pattern at position (5,5) top-left
+    const imgW = 10, imgH = 10;
+    const pixels = new Uint8ClampedArray(imgW * imgH * 4); // RGBA, all zeros
+
+    // 3x3 = 9 pixels, each with 3 RGB channels = 27 values
+    const pattern = [
+      255, 0, 0,   0, 255, 0,   0, 0, 255,
+      128, 64, 32, 200, 100, 50, 10, 20, 30,
+      50, 150, 250, 75, 175, 25, 220, 110, 55,
+    ];
+
+    // Place pattern into image at top-left (5,5)
+    for (let dy = 0; dy < 3; dy++) {
+      for (let dx = 0; dx < 3; dx++) {
+        const imgI = ((5 + dy) * imgW + (5 + dx)) * 4;
+        const pi = (dy * 3 + dx) * 3;
+        pixels[imgI] = pattern[pi];
+        pixels[imgI + 1] = pattern[pi + 1];
+        pixels[imgI + 2] = pattern[pi + 2];
+        pixels[imgI + 3] = 255;
+      }
+    }
+
+    const template = new Int16Array(pattern);
+    const mask = new Array(9).fill(true);
+    // Center of 3x3 block at top-left (5,5) is (5+1, 5+1) = (6,6)
+    const result = findBestMatch(pixels, imgW, imgH, template, mask, 3, 3, 6, 6, 4);
+    expect(result.x).toBeCloseTo(6, 0);
+    expect(result.y).toBeCloseTo(6, 0);
+    expect(result.score).toBeGreaterThan(0.8);
+  });
+
+  test('returns low score when template not in search window', () => {
+    const imgW = 10, imgH = 10;
+    const pixels = new Uint8ClampedArray(imgW * imgH * 4);
+    // All black image, colorful 3x1 template (3 pixels)
+    const template = new Int16Array([255, 0, 0, 0, 255, 0, 0, 0, 255]);
+    const mask = [true, true, true];
+    const result = findBestMatch(pixels, imgW, imgH, template, mask, 3, 1, 5, 5, 2);
+    // NCC on uniform-zero patch vs non-zero template yields 0 (zero variance in patch)
+    expect(result.score).toBeLessThan(0.3);
   });
 });

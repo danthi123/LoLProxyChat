@@ -4,7 +4,7 @@ declare const overwolf: any;
 
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
-import { normalizedCrossCorrelation, buildMask } from '../core/template-match';
+import { normalizedCrossCorrelation, buildMask, findBestMatch } from '../core/template-match';
 
 export enum TrackingState {
   SCANNING = 'scanning',
@@ -315,7 +315,46 @@ export class TrackingService {
   }
 
   private handleLocked(imageData: ImageData): void {
-    // Implemented in Task 4
+    if (!this.trackingTemplate || !this.lastPixelPos || !this.minimapRegion) {
+      this.state = TrackingState.SCANNING;
+      return;
+    }
+
+    const size = this.trackingTemplateSize;
+    const searchRadius = Math.round(this.expectedIconDiam * 1.5) || 30;
+
+    // Build all-true mask for tracking template (no masked pixels)
+    const numPixels = size * size;
+    const allTrueMask = new Array(numPixels).fill(true);
+
+    const result = findBestMatch(
+      imageData.data,
+      imageData.width,
+      imageData.height,
+      this.trackingTemplate,
+      allTrueMask,
+      size,
+      size,
+      this.lastPixelPos.x,
+      this.lastPixelPos.y,
+      searchRadius,
+    );
+
+    const LOCK_THRESHOLD = 0.6;
+    if (result.score >= LOCK_THRESHOLD) {
+      this.lastPixelPos = { x: result.x, y: result.y };
+      this.lastPosition = this.pixelToGamePosition(result.x, result.y, this.minimapRegion);
+
+      if (this.onPositionUpdate && this.lastPosition) {
+        this.onPositionUpdate(this.lastPosition);
+      }
+    } else {
+      // Correlation dropped below threshold — re-scan
+      console.log('[Tracking] LOCKED -> SCANNING (score:', result.score.toFixed(3), ')');
+      this.state = TrackingState.SCANNING;
+      this.trackingTemplate = null;
+      this.lastPixelPos = null;
+    }
   }
 
   /**
