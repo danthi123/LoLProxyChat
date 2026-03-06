@@ -232,7 +232,7 @@ async function main() {
           totalTemplates++;
         }
       } catch (e) {
-        // skip
+        console.warn(`  ! ${filename}: ${e.message}`);
       }
     }
 
