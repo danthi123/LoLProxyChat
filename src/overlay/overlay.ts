@@ -171,3 +171,5 @@ overwolf.windows.onMessageReceived.addListener((message: any) => {
 });
 
 console.log('LoLProxChat overlay loaded');
+
+export {};
