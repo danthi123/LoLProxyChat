@@ -1,64 +1,24 @@
-import { GEPService } from '../services/gep';
-import { GameStateService } from '../services/game-state';
+import { Orchestrator } from '../services/orchestrator';
 
-const gep = new GEPService();
-const gameState = new GameStateService();
+const orchestrator = new Orchestrator();
+orchestrator.start();
 
-let localSummonerName = '';
-
-function onGameEvent(name: string, data: any): void {
-  console.log('Game event: ' + name, data);
-
-  if (name === 'matchEnd' || name === 'match_end') {
-    console.log('Match ended - cleaning up session');
-    gameState.clearSession();
-  }
-}
-
-function onInfoUpdate(info: any): void {
-  if (info.feature === 'live_client_data' && info.info?.live_client_data?.all_players) {
-    try {
-      const playersData = JSON.parse(info.info.live_client_data.all_players);
-      const players = gameState.parsePlayerList({ players: playersData });
-
-      if (players.length > 0 && !gameState.getSession()) {
-        if (info.info.live_client_data.active_player) {
-          const activePlayer = JSON.parse(info.info.live_client_data.active_player);
-          localSummonerName = activePlayer.summonerName || '';
-        }
-
-        const gameMode = info.info.live_client_data.game_data
-          ? JSON.parse(info.info.live_client_data.game_data).gameMode || 'CLASSIC'
-          : 'CLASSIC';
-
-        const session = gameState.createSession(players, localSummonerName, gameMode);
-        if (session) {
-          console.log('Session created: room=' + session.roomId + ', players=' + session.eligiblePlayers.length);
-        }
-      }
-    } catch (e) {
-      console.error('Failed to parse player data:', e);
-    }
-  }
-}
-
-overwolf.games.onGameInfoUpdated.addListener((event) => {
-  if (event.gameInfo?.classId === 5426) {
-    if (event.gameInfo.isRunning) {
-      console.log('League of Legends detected - starting GEP');
-      gep.start(onGameEvent, onInfoUpdate);
-    } else {
-      console.log('League of Legends closed - stopping GEP');
-      gep.stop();
-      gameState.clearSession();
-    }
-  }
-});
-
-overwolf.games.getRunningGameInfo((result) => {
-  if (result?.classId === 5426) {
-    console.log('League of Legends already running - starting GEP');
-    gep.start(onGameEvent, onInfoUpdate);
+// Listen for messages from overlay window
+overwolf.windows.onMessageReceived.addListener((message: any) => {
+  const { action, payload } = message;
+  switch (action) {
+    case 'toggleSelfMute':
+      orchestrator.toggleSelfMute();
+      break;
+    case 'toggleMuteAll':
+      orchestrator.toggleMuteAll();
+      break;
+    case 'toggleMutePlayer':
+      orchestrator.toggleMutePlayer(payload.name);
+      break;
+    case 'setPTT':
+      orchestrator.setPTTState(payload.held);
+      break;
   }
 });
 
