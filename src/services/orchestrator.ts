@@ -19,7 +19,6 @@ export class Orchestrator {
   private peerStates: Map<string, PeerState> = new Map();
   private vadIntervalId: number | null = null;
 
-  private onOverlayUpdate: ((data: any) => void) | null = null;
 
   constructor() {
     this.gep = new GEPService();
@@ -54,13 +53,15 @@ export class Orchestrator {
     });
   }
 
-  setOverlayCallback(callback: (data: any) => void): void {
-    this.onOverlayUpdate = callback;
-  }
-
   private handleGameEvent(name: string, _data: any): void {
     if (name === 'matchEnd' || name === 'match_end') {
       this.endSession();
+    }
+    if (name === 'death' && this.session) {
+      this.session.localPlayer.isDead = true;
+    }
+    if (name === 'respawn' && this.session) {
+      this.session.localPlayer.isDead = false;
     }
   }
 
@@ -222,7 +223,7 @@ export class Orchestrator {
   }
 
   private broadcastOverlayState(): void {
-    if (!this.onOverlayUpdate || !this.audio) return;
+    if (!this.audio) return;
 
     const nearbyPeers = Array.from(this.peerStates.values())
       .filter((p) => {
@@ -239,11 +240,13 @@ export class Orchestrator {
         isDead: p.isDead,
       }));
 
-    this.onOverlayUpdate({
+    const data = {
       selfMuted: this.audio.isSelfMuted(),
       muteAll: this.audio.isMuteAll(),
       nearbyPeers,
-    });
+    };
+
+    overwolf.windows.sendMessage('overlay', 'overlayUpdate', data, () => {});
   }
 
   // Public controls (called from overlay via messaging)
@@ -251,6 +254,7 @@ export class Orchestrator {
   toggleMuteAll(): boolean { return this.audio?.toggleMuteAll() ?? false; }
   toggleMutePlayer(name: string): boolean { return this.audio?.toggleMutePlayer(name) ?? false; }
   setPTTState(held: boolean): void { this.audio?.setPTTState(held); }
+  updateSettings(settings: any): void { this.audio?.updateSettings(settings); }
 
   private endSession(): void {
     // Stop VAD loop

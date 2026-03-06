@@ -19,6 +19,9 @@ overwolf.windows.onMessageReceived.addListener((message: any) => {
     case 'setPTT':
       orchestrator.setPTTState(payload.held);
       break;
+    case 'updateSettings':
+      orchestrator.updateSettings(payload);
+      break;
   }
 });
 

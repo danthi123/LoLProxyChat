@@ -23,6 +23,8 @@ export class AudioService {
   // VAD state
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
+  private gainNode: GainNode | null = null;
+  private outputStream: MediaStream | null = null;
   private vadActive = false;
 
   // PTT state
@@ -42,12 +44,18 @@ export class AudioService {
       },
     });
 
-    // Set up VAD analyser
+    // Set up VAD analyser with input gain
     this.audioContext = new AudioContext();
     const source = this.audioContext.createMediaStreamSource(this.localStream);
+    this.gainNode = this.audioContext.createGain();
+    this.gainNode.gain.value = this.settings.inputVolume;
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 512;
-    source.connect(this.analyser);
+    source.connect(this.gainNode);
+    this.gainNode.connect(this.analyser);
+    const destination = this.audioContext.createMediaStreamDestination();
+    this.gainNode.connect(destination);
+    this.outputStream = destination.stream;
   }
 
   private isTransmitting(): boolean {
@@ -87,8 +95,8 @@ export class AudioService {
     const peer = new PeerConnection(remoteName);
     this.peers.set(remoteName, peer);
 
-    if (this.localStream) {
-      peer.addLocalStream(this.localStream);
+    if (this.outputStream) {
+      peer.addLocalStream(this.outputStream);
     }
 
     peer.onIceCandidate = (candidate) => {
@@ -120,7 +128,7 @@ export class AudioService {
       if (!peer) {
         peer = new PeerConnection(signal.from);
         this.peers.set(signal.from, peer);
-        if (this.localStream) peer.addLocalStream(this.localStream);
+        if (this.outputStream) peer.addLocalStream(this.outputStream);
 
         peer.onIceCandidate = (candidate) => {
           this.signaling.sendSignal({
@@ -229,6 +237,15 @@ export class AudioService {
 
   updateSettings(settings: Partial<AudioSettings>): void {
     Object.assign(this.settings, settings);
+    this.applyInputVolume();
+    this.updateLocalTrackState();
+    this.updateAllVolumes();
+  }
+
+  private applyInputVolume(): void {
+    if (this.gainNode) {
+      this.gainNode.gain.value = this.settings.inputVolume;
+    }
   }
 
   cleanup(): void {

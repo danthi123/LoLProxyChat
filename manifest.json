@@ -30,7 +30,6 @@
         "file": "overlay/overlay.html",
         "transparent": true,
         "resizable": false,
-        "clickthrough": true,
         "in_game_only": true,
         "topmost": true,
         "size": {
@@ -38,7 +37,7 @@
           "height": 400
         },
         "start_position": {
-          "left": 10,
+          "right": 10,
           "bottom": 200
         },
         "style": "inputPassThrough"
