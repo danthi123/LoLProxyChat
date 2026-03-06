@@ -1,18 +1,18 @@
-import { calculateVolume } from '../core/proximity';
-
 interface NearbyPeer {
   summonerName: string;
   championName: string;
   team: 'ORDER' | 'CHAOS';
-  distance: number;
   isMuted: boolean;
   isMutedByLocal: boolean;
+  isDead: boolean;
 }
 
 interface OverlayState {
   selfMuted: boolean;
   muteAll: boolean;
   nearbyPeers: NearbyPeer[];
+  trackingState?: string;
+  lastPosition?: { x: number; y: number } | null;
 }
 
 const playerList = document.getElementById('player-list')!;
@@ -40,11 +40,10 @@ document.addEventListener('mousemove', (e) => {
   const dy = e.clientY - dragOffsetY;
   dragOffsetX = e.clientX;
   dragOffsetY = e.clientY;
-
   overwolf.windows.getCurrentWindow((result: any) => {
     if (result.success) {
-      const win = result.window;
-      overwolf.windows.changePosition(win.id, win.left + dx, win.top + dy, () => {});
+      overwolf.windows.changePosition(result.window.id,
+        result.window.left + dx, result.window.top + dy, () => {});
     }
   });
 });
@@ -56,15 +55,25 @@ document.addEventListener('mouseup', () => {
 
 // --- Controls ---
 btnSelfMute.addEventListener('click', () => {
+  const nowMuted = !btnSelfMute.classList.contains('active');
+  btnSelfMute.classList.toggle('active', nowMuted);
+  btnSelfMute.textContent = nowMuted ? 'MIC OFF' : 'MIC';
   sendToBackground('toggleSelfMute', {});
 });
 
 btnMuteAll.addEventListener('click', () => {
+  const nowMuted = !btnMuteAll.classList.contains('active');
+  btnMuteAll.classList.toggle('active', nowMuted);
+  btnMuteAll.textContent = nowMuted ? 'ALL OFF' : 'VOL';
   sendToBackground('toggleMuteAll', {});
 });
 
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('hidden');
+});
+
+document.getElementById('btn-calibrate')!.addEventListener('click', () => {
+  sendToBackground('openCalibration', {});
 });
 
 document.getElementById('input-mode')!.addEventListener('change', (e) => {
@@ -83,9 +92,6 @@ function sendToBackground(action: string, payload: any): void {
 
 // --- Build player row using safe DOM methods ---
 function createPlayerRow(peer: NearbyPeer): HTMLElement {
-  const vol = calculateVolume(peer.distance);
-  const volPct = Math.round(vol * 100);
-
   const row = document.createElement('div');
   row.className = 'player-row ' + (peer.team === 'ORDER' ? 'ally' : 'enemy');
 
@@ -94,20 +100,17 @@ function createPlayerRow(peer: NearbyPeer): HTMLElement {
   nameSpan.textContent = peer.championName; // textContent is XSS-safe
   row.appendChild(nameSpan);
 
-  if (peer.isMuted) {
+  if (peer.isDead) {
+    const deadIndicator = document.createElement('span');
+    deadIndicator.className = 'player-muted-indicator';
+    deadIndicator.textContent = 'DEAD';
+    row.appendChild(deadIndicator);
+  } else if (peer.isMuted) {
     const mutedIndicator = document.createElement('span');
     mutedIndicator.className = 'player-muted-indicator';
     mutedIndicator.textContent = 'MUTED';
     row.appendChild(mutedIndicator);
   }
-
-  const volumeBar = document.createElement('div');
-  volumeBar.className = 'player-volume-bar';
-  const volumeFill = document.createElement('div');
-  volumeFill.className = 'player-volume-fill';
-  volumeFill.style.width = volPct + '%';
-  volumeBar.appendChild(volumeFill);
-  row.appendChild(volumeBar);
 
   const muteBtn = document.createElement('button');
   muteBtn.className = 'player-mute-btn' + (peer.isMutedByLocal ? ' muted' : '');
@@ -141,9 +144,22 @@ function renderState(state: OverlayState): void {
     return;
   }
 
-  const sorted = [...state.nearbyPeers].sort((a, b) => a.distance - b.distance);
-  for (const peer of sorted) {
+  for (const peer of state.nearbyPeers) {
     playerList.appendChild(createPlayerRow(peer));
+  }
+
+  // Debug: show tracking state and position
+  if (state.trackingState || state.lastPosition) {
+    const dbg = document.createElement('div');
+    dbg.className = 'empty-state';
+    dbg.style.fontSize = '10px';
+    const parts: string[] = [];
+    if (state.trackingState) parts.push('tracking: ' + state.trackingState);
+    if (state.lastPosition) {
+      parts.push('pos: (' + Math.round(state.lastPosition.x) + ',' + Math.round(state.lastPosition.y) + ')');
+    }
+    dbg.textContent = parts.join(' | ');
+    playerList.appendChild(dbg);
   }
 }
 
