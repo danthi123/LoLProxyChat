@@ -97,6 +97,10 @@ supabase/functions/
 └── compute-volumes/index.ts
 ```
 
+## Acknowledgements
+
+- [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) and its [wiki](https://github.com/Maknee/LeagueMinimapDetectionCNN/wiki) -- reference code and champion circle assets used for the minimap detection and classifier training pipeline
+
 ## License
 
 Private -- not yet licensed for redistribution.
