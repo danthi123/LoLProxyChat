@@ -33,6 +33,8 @@ module.exports = {
     new webpack.DefinePlugin({
       __SUPABASE_URL__: JSON.stringify(process.env.SUPABASE_URL || ''),
       __SUPABASE_ANON_KEY__: JSON.stringify(process.env.SUPABASE_ANON_KEY || ''),
+      __TURN_SERVER__: JSON.stringify(process.env.TURN_SERVER || ''),
+      __TURN_SECRET__: JSON.stringify(process.env.TURN_SECRET || ''),
     }),
     new CopyPlugin({
       patterns: [

@@ -132,7 +132,7 @@ export class AudioService {
     if (this.peers.has(remoteName)) return;
 
     console.log('[Audio] Connecting to peer:', remoteName);
-    const peer = new PeerConnection(remoteName);
+    const peer = await PeerConnection.create(remoteName);
     this.peers.set(remoteName, peer);
 
     if (this.outputStream) {
@@ -178,7 +178,7 @@ export class AudioService {
 
       if (signal.type === 'offer') {
         if (!peer) {
-          peer = new PeerConnection(signal.from);
+          peer = await PeerConnection.create(signal.from);
           this.peers.set(signal.from, peer);
           if (this.outputStream) peer.addLocalStream(this.outputStream);
 

@@ -1,4 +1,4 @@
-import { ICE_SERVERS } from '../core/config';
+import { getIceServers, ICE_SERVERS } from '../core/config';
 
 export class PeerConnection {
   private pc: RTCPeerConnection;
@@ -12,9 +12,9 @@ export class PeerConnection {
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   onDataMessage: ((data: string) => void) | null = null;
 
-  constructor(remoteName: string) {
+  private constructor(remoteName: string, iceServers: RTCIceServer[]) {
     this.remoteName = remoteName;
-    this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.pc = new RTCPeerConnection({ iceServers });
 
     this.audioElement = new Audio();
     this.audioElement.autoplay = true;
@@ -47,6 +47,11 @@ export class PeerConnection {
       this.dataChannel = event.channel;
       this.setupDataChannel();
     };
+  }
+
+  static async create(remoteName: string): Promise<PeerConnection> {
+    const iceServers = await getIceServers();
+    return new PeerConnection(remoteName, iceServers);
   }
 
   private setupDataChannel(): void {
