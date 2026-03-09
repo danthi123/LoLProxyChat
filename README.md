@@ -99,7 +99,8 @@ supabase/functions/
 
 ## Acknowledgements
 
-- [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) and its [wiki](https://github.com/Maknee/LeagueMinimapDetectionCNN/wiki) -- reference code and champion circle assets used for the minimap detection and classifier training pipeline
+- [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) -- reference code for minimap detection
+- [League of Legends Wiki](https://wiki.leagueoflegends.com) -- champion circle icon assets used for classifier training
 
 ## License
 
