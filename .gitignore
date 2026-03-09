@@ -2,10 +2,20 @@ node_modules/
 dist/
 .env
 
+# Build artifacts
+*.opk
+
 # Large generated assets (not needed for build)
 assets/champion-circles/
 scripts/synthetic-data/
 src/data/champion-fingerprints.json
+
+# Python
+scripts/__pycache__/
+*.pyc
+
+# PyTorch checkpoint (large, ONNX model is the shipped artifact)
+models/*.pt
 
 # Temp/logs
 logs.txt
