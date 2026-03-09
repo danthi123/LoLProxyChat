@@ -28,7 +28,35 @@ html, body {
   display: flex;
   flex-direction: column;
   align-self: flex-start;
+  transition: width 0.15s, min-width 0.15s, max-width 0.15s;
 }
+
+/* --- Collapsed state --- */
+.panel.collapsed {
+  /* Keep 240px allocation so minimap-border stays aligned */
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+  align-items: flex-end; /* push thin bar to right edge, next to minimap */
+}
+.panel.collapsed .widget-header {
+  width: 36px;
+  flex-direction: column;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border-bottom: none;
+  /* Restore background on just the header bar */
+  background: rgba(10, 12, 18, 0.85);
+  border: 1px solid rgba(100, 120, 160, 0.3);
+}
+.panel.collapsed .widget-title { display: none; }
+.panel.collapsed .header-controls {
+  flex-direction: column;
+  gap: 6px;
+}
+.panel.collapsed #btn-settings { display: none; }
+.panel.collapsed .player-list { display: none; }
+.panel.collapsed .settings-panel { display: none; }
 
 .widget-header {
   display: flex;
@@ -139,7 +167,7 @@ html, body {
   padding: 8px 10px;
   border-top: 1px solid rgba(100, 120, 160, 0.2);
 }
-.settings-panel.hidden { display: none; }
+.hidden { display: none; }
 
 .setting-row {
   display: flex;
@@ -150,7 +178,7 @@ html, body {
 .setting-row label { font-size: 11px; color: #8892a8; }
 .setting-value-group { display: flex; align-items: center; gap: 4px; }
 .setting-value-label { font-size: 10px; color: #8892a8; min-width: 16px; text-align: right; }
-.setting-row select, .setting-row input[type="range"] {
+.setting-row select {
   background: rgba(20, 25, 35, 0.9);
   border: 1px solid rgba(100, 120, 160, 0.3);
   color: #cdcdcd;
@@ -158,6 +186,25 @@ html, body {
   padding: 2px 4px;
   font-size: 11px;
 }
+.setting-row input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: rgba(100, 120, 160, 0.3);
+  border: none;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.setting-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  background: #8892a8;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.setting-row input[type="range"]::-webkit-slider-thumb:hover { background: #cdcdcd; }
 
 .player-list::-webkit-scrollbar { width: 4px; }
 .player-list::-webkit-scrollbar-track { background: transparent; }

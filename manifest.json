@@ -8,7 +8,7 @@
     "minimum-overwolf-version": "0.230.0",
     "minimum-gep-version": "0.230.0",
     "description": "Proximity voice chat for League of Legends",
-    "dock_button_title": "ProxChat",
+    "dock_button_title": "LolProxChat",
     "icon": "icons/IconMouseOver.png",
     "icon_gray": "icons/IconMouseNormal.png"
   },

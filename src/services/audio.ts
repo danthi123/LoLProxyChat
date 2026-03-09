@@ -14,6 +14,7 @@ export class AudioService {
   private settings: AudioSettings = {
     inputMode: 'vad',
     inputVolume: 1.0,
+    vadSensitivity: 0.25,
     pttKey: 'V',
     playerVolumes: {},
   };
@@ -63,15 +64,34 @@ export class AudioService {
       this.rnnoiseNode.scriptNode.connect(destination);
       console.log('[Audio] RNNoise loaded — noise suppression + VAD active');
 
-      // Poll RNNoise VAD score at ~20Hz
+      // Poll RNNoise VAD score at ~20Hz with hangover timer.
+      // Hangover keeps the mic open for a short period after voice drops,
+      // preventing word endings from being clipped.
+      let vadHangoverRemaining = 0;
+      const VAD_HANGOVER_MS = 400;     // keep mic open 400ms after voice drops
+      const VAD_POLL_MS = 50;
+
       this.vadPollId = window.setInterval(() => {
         if (!this.rnnoiseNode || this.settings.inputMode !== 'vad') return;
+        const score = this.rnnoiseNode.getVadScore();
         const wasActive = this.vadActive;
-        this.vadActive = this.rnnoiseNode.getVadScore() > 0.5;
+
+        if (score > this.settings.vadSensitivity) {
+          // Voice detected — activate and reset hangover
+          this.vadActive = true;
+          vadHangoverRemaining = VAD_HANGOVER_MS;
+        } else if (vadHangoverRemaining > 0) {
+          // Below threshold but hangover still active — stay open
+          vadHangoverRemaining -= VAD_POLL_MS;
+        } else {
+          // Hangover expired — deactivate
+          this.vadActive = false;
+        }
+
         if (this.vadActive !== wasActive) {
           this.updateLocalTrackState();
         }
-      }, 50) as unknown as number;
+      }, VAD_POLL_MS) as unknown as number;
     } catch (e) {
       // Fallback: no RNNoise, use browser built-in noiseSuppression
       console.warn('[Audio] RNNoise failed to load, falling back to browser noise suppression:', e);

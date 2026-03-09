@@ -10,11 +10,12 @@
     <!-- Left: ProxChat panel -->
     <div id="panel" class="panel">
       <div id="drag-handle" class="widget-header">
-        <span class="widget-title">ProxChat</span>
+        <span class="widget-title">LolProxChat</span>
         <div class="header-controls">
           <button id="btn-self-mute" class="icon-btn" title="Toggle Self Mute">MIC</button>
           <button id="btn-mute-all" class="icon-btn" title="Mute All">VOL</button>
           <button id="btn-settings" class="icon-btn" title="Settings">SET</button>
+          <button id="btn-collapse" class="icon-btn" title="Collapse">&raquo;</button>
         </div>
       </div>
       <div id="player-list" class="player-list">
@@ -30,18 +31,28 @@
         </div>
         <div class="setting-row">
           <label>Mic Volume</label>
-          <input id="input-volume" type="range" min="0" max="100" value="100">
-        </div>
-        <div class="setting-row">
-          <label>Scan Rate</label>
           <div class="setting-value-group">
-            <input id="input-scan-rate" type="range" min="1" max="30" value="15">
-            <span id="scan-rate-label" class="setting-value-label">15</span>
+            <input id="input-volume" type="range" min="0" max="100" value="100">
+            <span id="volume-label" class="setting-value-label">100</span>
           </div>
         </div>
         <div class="setting-row">
-          <label>Debug Overlay</label>
+          <label>Sensitivity</label>
+          <div class="setting-value-group">
+            <input id="input-sensitivity" type="range" min="0" max="100" value="50">
+            <span id="sensitivity-label" class="setting-value-label">50</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>Debug</label>
           <button id="btn-debug" class="icon-btn">OFF</button>
+        </div>
+        <div id="scan-rate-row" class="setting-row hidden">
+          <label>Scan Rate</label>
+          <div class="setting-value-group">
+            <input id="input-scan-rate" type="range" min="0" max="100" value="50">
+            <span id="scan-rate-label" class="setting-value-label">50</span>
+          </div>
         </div>
       </div>
     </div>

@@ -22,6 +22,8 @@ const btnSelfMute = document.getElementById('btn-self-mute')!;
 const btnMuteAll = document.getElementById('btn-mute-all')!;
 const btnSettings = document.getElementById('btn-settings')!;
 const btnDebug = document.getElementById('btn-debug')!;
+const btnCollapse = document.getElementById('btn-collapse')!;
+const panel = document.getElementById('panel')!;
 const settingsPanel = document.getElementById('settings-panel')!;
 const dragHandle = document.getElementById('drag-handle')!;
 const trackingDot = document.getElementById('tracking-dot')!;
@@ -160,10 +162,24 @@ btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('hidden');
 });
 
+let collapsed = false;
+btnCollapse.addEventListener('click', () => {
+  collapsed = !collapsed;
+  panel.classList.toggle('collapsed', collapsed);
+  btnCollapse.textContent = collapsed ? '\u00AB' : '\u00BB';
+  btnCollapse.title = collapsed ? 'Expand' : 'Collapse';
+  // Close settings when collapsing
+  if (collapsed) {
+    settingsPanel.classList.add('hidden');
+  }
+});
+
+const scanRateRow = document.getElementById('scan-rate-row')!;
 btnDebug.addEventListener('click', () => {
   debugEnabled = !debugEnabled;
   btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';
   btnDebug.classList.toggle('active', debugEnabled);
+  scanRateRow.classList.toggle('hidden', !debugEnabled);
   // Immediately hide debug elements when toggled off
   if (!debugEnabled) {
     trackingDot.style.display = 'none';
@@ -179,16 +195,30 @@ document.getElementById('input-mode')!.addEventListener('change', (e) => {
   sendToBackground('updateSettings', { inputMode: mode });
 });
 
-document.getElementById('input-volume')!.addEventListener('input', (e) => {
-  const vol = parseInt((e.target as HTMLInputElement).value) / 100;
-  sendToBackground('updateSettings', { inputVolume: vol });
+const volumeInput = document.getElementById('input-volume') as HTMLInputElement;
+const volumeLabel = document.getElementById('volume-label')!;
+volumeInput.addEventListener('input', () => {
+  const raw = parseInt(volumeInput.value);
+  volumeLabel.textContent = String(raw);
+  sendToBackground('updateSettings', { inputVolume: raw / 100 });
+});
+
+const sensitivityInput = document.getElementById('input-sensitivity') as HTMLInputElement;
+const sensitivityLabel = document.getElementById('sensitivity-label')!;
+sensitivityInput.addEventListener('input', () => {
+  const raw = parseInt(sensitivityInput.value);
+  sensitivityLabel.textContent = String(raw);
+  // Map 0-100 → 0.0-0.5 for backend VAD threshold
+  sendToBackground('updateSettings', { vadSensitivity: raw / 200 });
 });
 
 const scanRateInput = document.getElementById('input-scan-rate') as HTMLInputElement;
 const scanRateLabel = document.getElementById('scan-rate-label')!;
 scanRateInput.addEventListener('input', () => {
-  const fps = parseInt(scanRateInput.value);
-  scanRateLabel.textContent = String(fps);
+  const raw = parseInt(scanRateInput.value);
+  scanRateLabel.textContent = String(raw);
+  // Map 0-100 → 1-30 FPS for backend scan rate
+  const fps = Math.max(1, Math.round(1 + (raw / 100) * 29));
   sendToBackground('setScanRate', { fps });
 });
 
@@ -196,7 +226,18 @@ function sendToBackground(action: string, payload: any): void {
   overwolf.windows.sendMessage('background', action, payload, () => {});
 }
 
-// --- Build player row using safe DOM methods ---
+// --- Track active player row DOM elements for in-place updates ---
+const playerRows: Map<string, {
+  row: HTMLElement;
+  nameSpan: HTMLElement;
+  indicator: HTMLElement | null;
+  volSlider: HTMLInputElement;
+  muteBtn: HTMLButtonElement;
+}> = new Map();
+
+// Track whether a player slider is being actively dragged
+let activeSliderPlayer: string | null = null;
+
 function createPlayerRow(peer: NearbyPeer): HTMLElement {
   const row = document.createElement('div');
   row.className = 'player-row ' + (peer.team === 'ORDER' ? 'ally' : 'enemy');
@@ -206,25 +247,25 @@ function createPlayerRow(peer: NearbyPeer): HTMLElement {
   nameSpan.textContent = peer.championName;
   row.appendChild(nameSpan);
 
+  const indicator = document.createElement('span');
+  indicator.className = 'player-muted-indicator';
   if (peer.isDead) {
-    const deadIndicator = document.createElement('span');
-    deadIndicator.className = 'player-muted-indicator';
-    deadIndicator.textContent = 'DEAD';
-    row.appendChild(deadIndicator);
+    indicator.textContent = 'DEAD';
   } else if (peer.isMuted) {
-    const mutedIndicator = document.createElement('span');
-    mutedIndicator.className = 'player-muted-indicator';
-    mutedIndicator.textContent = 'MUTED';
-    row.appendChild(mutedIndicator);
+    indicator.textContent = 'MUTED';
+  } else {
+    indicator.style.display = 'none';
   }
+  row.appendChild(indicator);
 
-  // Per-player volume slider
-  const volSlider = document.createElement('input');
+  const volSlider = document.createElement('input') as HTMLInputElement;
   volSlider.type = 'range';
   volSlider.className = 'player-volume';
   volSlider.min = '0';
   volSlider.max = '100';
   volSlider.value = String(Math.round((playerVolumes.get(peer.summonerName) ?? 1.0) * 100));
+  volSlider.addEventListener('mousedown', () => { activeSliderPlayer = peer.summonerName; });
+  volSlider.addEventListener('mouseup', () => { activeSliderPlayer = null; });
   volSlider.addEventListener('input', () => {
     const vol = parseInt(volSlider.value) / 100;
     playerVolumes.set(peer.summonerName, vol);
@@ -232,8 +273,7 @@ function createPlayerRow(peer: NearbyPeer): HTMLElement {
   });
   row.appendChild(volSlider);
 
-  // Per-player mute toggle button
-  const muteBtn = document.createElement('button');
+  const muteBtn = document.createElement('button') as HTMLButtonElement;
   muteBtn.className = 'player-mute-btn' + (peer.isMutedByLocal ? ' muted' : '');
   muteBtn.textContent = peer.isMutedByLocal ? 'MUTED' : 'MUTE';
   muteBtn.addEventListener('click', () => {
@@ -241,7 +281,37 @@ function createPlayerRow(peer: NearbyPeer): HTMLElement {
   });
   row.appendChild(muteBtn);
 
+  playerRows.set(peer.summonerName, { row, nameSpan, indicator, volSlider, muteBtn });
   return row;
+}
+
+function updatePlayerRow(peer: NearbyPeer): void {
+  const entry = playerRows.get(peer.summonerName);
+  if (!entry) return;
+
+  // Update indicator
+  if (peer.isDead) {
+    entry.indicator!.textContent = 'DEAD';
+    entry.indicator!.style.display = '';
+  } else if (peer.isMuted) {
+    entry.indicator!.textContent = 'MUTED';
+    entry.indicator!.style.display = '';
+  } else {
+    entry.indicator!.style.display = 'none';
+  }
+
+  // Don't touch slider if user is actively dragging it
+  if (activeSliderPlayer !== peer.summonerName) {
+    const expected = String(Math.round((playerVolumes.get(peer.summonerName) ?? 1.0) * 100));
+    if (entry.volSlider.value !== expected) {
+      entry.volSlider.value = expected;
+    }
+  }
+
+  // Update mute button
+  const isMuted = peer.isMutedByLocal;
+  entry.muteBtn.className = 'player-mute-btn' + (isMuted ? ' muted' : '');
+  entry.muteBtn.textContent = isMuted ? 'MUTED' : 'MUTE';
 }
 
 // --- Render state ---
@@ -251,35 +321,56 @@ function renderState(state: OverlayState): void {
   btnMuteAll.classList.toggle('active', state.muteAll);
   btnMuteAll.textContent = state.muteAll ? 'ALL OFF' : 'VOL';
 
-  while (playerList.firstChild) {
-    playerList.removeChild(playerList.firstChild);
+  // Build set of current peer names for diffing
+  const currentNames = new Set(state.nearbyPeers.map(p => p.summonerName));
+
+  // Remove rows for peers that left
+  for (const [name, entry] of playerRows) {
+    if (!currentNames.has(name)) {
+      entry.row.remove();
+      playerRows.delete(name);
+    }
   }
 
-  if (state.nearbyPeers.length === 0) {
-    const emptyDiv = document.createElement('div');
-    emptyDiv.className = 'empty-state';
-    emptyDiv.textContent = 'Waiting for nearby players...';
-    playerList.appendChild(emptyDiv);
-  }
-
-  if (state.nearbyPeers.length > 0) {
-    for (const peer of state.nearbyPeers) {
+  // Update existing rows or create new ones
+  for (const peer of state.nearbyPeers) {
+    if (playerRows.has(peer.summonerName)) {
+      updatePlayerRow(peer);
+    } else {
       playerList.appendChild(createPlayerRow(peer));
     }
   }
 
+  // Show/hide empty state
+  const emptyState = playerList.querySelector('.empty-state');
+  if (state.nearbyPeers.length === 0) {
+    if (!emptyState) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'empty-state';
+      emptyDiv.textContent = 'Waiting for nearby players...';
+      playerList.appendChild(emptyDiv);
+    }
+  } else if (emptyState) {
+    emptyState.remove();
+  }
+
   // Debug info: tracking state + position (only when debug enabled)
+  let dbgEl = playerList.querySelector('.debug-info') as HTMLElement | null;
   if (debugEnabled && (state.trackingState || state.lastPosition)) {
-    const dbg = document.createElement('div');
-    dbg.className = 'empty-state';
-    dbg.style.fontSize = '10px';
+    if (!dbgEl) {
+      dbgEl = document.createElement('div');
+      dbgEl.className = 'empty-state debug-info';
+      dbgEl.style.fontSize = '10px';
+      playerList.appendChild(dbgEl);
+    }
     const parts: string[] = [];
     if (state.trackingState) parts.push('tracking: ' + state.trackingState);
     if (state.lastPosition) {
       parts.push('pos: (' + Math.round(state.lastPosition.x) + ',' + Math.round(state.lastPosition.y) + ')');
     }
-    dbg.textContent = parts.join(' | ');
-    playerList.appendChild(dbg);
+    dbgEl.textContent = parts.join(' | ');
+  } else if (dbgEl) {
+    dbgEl.remove();
   }
 
   // Update tracking dot position on minimap border (only when debug enabled)
