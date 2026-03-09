@@ -104,4 +104,6 @@ supabase/functions/
 
 ## License
 
-Private -- not yet licensed for redistribution.
+[PolyForm Noncommercial 1.0.0](LICENSE) -- source available for personal and noncommercial use only.
+
+Champion icon assets from the [League of Legends Wiki](https://wiki.leagueoflegends.com) (CC BY-SA 3.0) were used for model training only and are not distributed with this software.
