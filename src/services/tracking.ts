@@ -826,15 +826,12 @@ export class TrackingService {
     const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
     const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
 
-    // No teal blobs at all — hold position
+    // No teal blobs at all — extrapolate position using decaying velocity
     if (tealBlobs.length === 0) {
       if (this.lockedTickCount === 0) {
-        console.log('[Tracking] Holding position (no teal blobs)');
+        console.log('[Tracking] Extrapolating position (no teal blobs)');
       }
-      this.lockedTickCount++;
-      if (this.onPositionUpdate && this.lastPosition) {
-        this.onPositionUpdate(this.lastPosition);
-      }
+      this.extrapolatePosition(region);
       return;
     }
 
@@ -925,15 +922,12 @@ export class TrackingService {
       }
     }
 
-    // --- Phase 3: No blob matched at all — hold position ---
+    // --- Phase 3: No blob matched at all — extrapolate with decaying velocity ---
     if (!bestBlob) {
       if (this.lockedTickCount === 0) {
-        console.log('[Tracking] Holding position (no match in range)');
+        console.log('[Tracking] Extrapolating position (no match in range)');
       }
-      this.lockedTickCount++;
-      if (this.onPositionUpdate && this.lastPosition) {
-        this.onPositionUpdate(this.lastPosition);
-      }
+      this.extrapolatePosition(region);
       return;
     }
 
@@ -952,6 +946,39 @@ export class TrackingService {
     this.lastPixelPos = { x: cx, y: cy };
     this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
     this.lockedTickCount = 0;
+
+    if (this.onPositionUpdate && this.lastPosition) {
+      this.onPositionUpdate(this.lastPosition);
+    }
+  }
+
+  /**
+   * Extrapolate position using decaying velocity when tracking is lost.
+   * Velocity decays by 30% per frame (~8fps), so movement fades out over ~1 second.
+   * Position is clamped to minimap bounds to prevent drifting off-map.
+   */
+  private extrapolatePosition(region: { x: number; y: number; width: number; height: number }): void {
+    this.lockedTickCount++;
+
+    // Only extrapolate if we have meaningful velocity
+    const speed = Math.abs(this.velocityX) + Math.abs(this.velocityY);
+    if (speed > 0.1 && this.lastPixelPos && this.minimapRegion) {
+      const lastRegX = this.lastPixelPos.x - this.minimapRegion.x;
+      const lastRegY = this.lastPixelPos.y - this.minimapRegion.y;
+
+      // Apply velocity and clamp to minimap bounds
+      const newRegX = Math.max(0, Math.min(region.width - 1, lastRegX + this.velocityX));
+      const newRegY = Math.max(0, Math.min(region.height - 1, lastRegY + this.velocityY));
+
+      const cx = this.minimapRegion.x + newRegX;
+      const cy = this.minimapRegion.y + newRegY;
+      this.lastPixelPos = { x: cx, y: cy };
+      this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+
+      // Decay velocity each frame (converges to zero over ~8 frames / 1 second)
+      this.velocityX *= 0.7;
+      this.velocityY *= 0.7;
+    }
 
     if (this.onPositionUpdate && this.lastPosition) {
       this.onPositionUpdate(this.lastPosition);
