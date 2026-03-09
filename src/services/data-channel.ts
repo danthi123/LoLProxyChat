@@ -31,17 +31,17 @@ export class DataChannelService {
   }
 
   /**
-   * Returns and clears peer blobs (consume-once pattern prevents unbounded growth).
+   * Returns the latest blob from each registered peer.
+   * Blobs persist until the peer sends a new one or is unregistered.
+   * (No clear-on-read — volume tick runs at 8Hz but peers may send less often.)
    */
   getPeerBlobs(): Record<string, string> {
     const result: Record<string, string> = {};
     for (const [name, blob] of this.peerBlobs) {
-      // Only include blobs from peers that are still registered
       if (this.peers.has(name)) {
         result[name] = blob;
       }
     }
-    this.peerBlobs.clear();
     return result;
   }
 }

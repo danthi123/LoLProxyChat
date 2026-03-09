@@ -96,14 +96,6 @@ export class AudioService {
     const wasActive = this.vadActive;
     this.vadActive = average > threshold;
     this.vadLogCounter++;
-    // Log VAD state every ~5 seconds (100 calls at 20/sec)
-    if (this.vadLogCounter % 100 === 0) {
-      console.log('[Audio] VAD: avg=' + average.toFixed(1) + ' active=' + this.vadActive +
-        ' transmitting=' + this.isTransmitting() + ' selfMuted=' + this.selfMuted +
-        ' mode=' + this.settings.inputMode +
-        ' outputTracks=' + (this.outputStream?.getAudioTracks().length ?? 0) +
-        ' tracksEnabled=' + (this.outputStream?.getAudioTracks().map(t => t.enabled).join(',') ?? 'none'));
-    }
     // Only update track state when VAD state changes to reduce toggling
     if (this.vadActive !== wasActive) {
       this.updateLocalTrackState();

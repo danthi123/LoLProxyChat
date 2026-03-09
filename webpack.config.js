@@ -41,6 +41,12 @@ module.exports = {
         { from: 'src/background/background.html', to: 'background/' },
         { from: 'src/overlay/overlay.html', to: 'overlay/' },
         { from: 'src/overlay/overlay.css', to: 'overlay/' },
+        // Champion classifier model + labels
+        { from: 'models/champion_classifier.onnx', to: 'models/' },
+        { from: 'models/champion_labels.json', to: 'models/' },
+        // ONNX Runtime WASM + MJS loader files (both required for WASM backend)
+        { from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded*.wasm', to: 'background/[name][ext]' },
+        { from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded*.mjs', to: 'background/[name][ext]' },
       ],
     }),
   ],

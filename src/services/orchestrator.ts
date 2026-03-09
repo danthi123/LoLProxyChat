@@ -3,6 +3,7 @@ import { GameStateService, GameSession } from './game-state';
 import { SignalingService, SignalMessage, PositionBroadcast } from './signaling';
 import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
+import { ChampionClassifier } from './champion-classifier';
 import { DataChannelService } from './data-channel';
 import { VolumeClient } from './volume-client';
 import { PeerState } from '../core/types';
@@ -214,6 +215,21 @@ export class Orchestrator {
         this.tracking = new TrackingService(w, h, session.mapType);
         this.tracking.loadChampionTemplate(session.localPlayer.championName);
 
+        // Load champion classifier (async, non-blocking — tracking works without it)
+        const classifier = new ChampionClassifier();
+        classifier.load(
+          '../models/champion_classifier.onnx',
+          '../models/champion_labels.json',
+          session.localPlayer.championName,
+        ).then(() => {
+          if (this.tracking) {
+            this.tracking.setClassifier(classifier);
+            console.log('[ProxChat] Champion classifier loaded');
+          }
+        }).catch(err => {
+          console.warn('[ProxChat] Champion classifier failed to load (tracking continues without it):', err);
+        });
+
         // Read minimap scale from League config and apply before starting tracking
         this.readMinimapScale((scale) => {
           if (scale !== null && this.tracking) {
@@ -224,7 +240,7 @@ export class Orchestrator {
 
         this.tracking.start((pos) => {
           // Position callback — no longer directly updates audio
-          console.log('[ProxChat] Position update:', Math.round(pos.x), Math.round(pos.y));
+          // Position updates handled by volume tick
         }, 15);
 
         // Initialize data channel service and volume client
@@ -312,10 +328,7 @@ export class Orchestrator {
       // Call Edge Function: encrypt our position + compute volumes
       const result = await this.volumeClient.computeVolumes(position, peerBlobs);
 
-      console.log('[ProxChat] Volume tick: pos=(' + Math.round(position.x) + ',' + Math.round(position.y) +
-        ') peers=' + Object.keys(peerBlobs).length +
-        ' volumes=' + JSON.stringify(result.peerVolumes) +
-        ' hasBlob=' + !!result.myBlob);
+      // Silent — peer connect/disconnect logged elsewhere
 
       // Broadcast our encrypted blob to all peers
       this.dataChannels.broadcastBlob(result.myBlob);

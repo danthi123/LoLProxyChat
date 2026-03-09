@@ -2,6 +2,7 @@ declare const overwolf: any;
 
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
+import { ChampionClassifier } from './champion-classifier';
 
 export enum TrackingState {
   SCANNING = 'scanning',
@@ -47,21 +48,24 @@ export class TrackingService {
   private velocityX = 0;
   private velocityY = 0;
 
-  // Interior color fingerprint of the tracked blob (average RGB inside the ring)
-  private fingerprint: { r: number; g: number; b: number } | null = null;
-
   // Known peer positions in region-relative pixel coordinates (from signaling broadcasts)
   // Used as soft penalty: blobs near a known peer are less likely to be "self"
   private peerPixelPositions: { x: number; y: number }[] = [];
 
-  // Self-identification via movement path line (white pixels near teal blobs)
-  // Maps approximate blob position key ("x,y") to accumulated white pixel evidence
-  private selfScores: Map<string, number> = new Map();
+  // Frame counter during SCANNING (warmup before lock-on)
   private scanFrameCount = 0;
 
   // Filtered image for overlay debug display
   private filteredImageUrl: string | null = null;
   private filteredImageTick = 0;
+
+  // Champion classifier (ONNX model)
+  private classifier: ChampionClassifier | null = null;
+  // Cached classifier scores per blob (refreshed periodically, not every frame)
+  private classifierScores: Map<string, number> = new Map();
+  // EMA-smoothed classifier scores to dampen single-frame misclassifications
+  private smoothedClassifierScores: Map<string, number> = new Map();
+  private classifierTick = 0;
 
   // Diagnostics
   private lockedTickCount = 0;
@@ -129,7 +133,6 @@ export class TrackingService {
     this.state = TrackingState.SCANNING;
     this.lastPixelPos = null;
     this.lockedTickCount = 0;
-    this.selfScores.clear();
     this.scanFrameCount = 0;
   }
 
@@ -145,12 +148,16 @@ export class TrackingService {
     this.state = TrackingState.SCANNING;
     this.lastPixelPos = null;
     this.lockedTickCount = 0;
-    this.selfScores.clear();
     this.scanFrameCount = 0;
   }
 
   loadChampionTemplate(_championName: string): void {
     console.log('[Tracking] Using color filter + blob detection');
+  }
+
+  setClassifier(classifier: ChampionClassifier): void {
+    this.classifier = classifier;
+    console.log('[Tracking] Champion classifier set');
   }
 
   /**
@@ -194,6 +201,117 @@ export class TrackingService {
     return Math.sqrt(minDistSq) / threshold;
   }
 
+  /**
+   * Run the champion classifier on teal blobs and cache the "local champion confidence" per blob.
+   * Called every few frames (not every frame) to amortize ONNX inference cost.
+   * Scores are cached by blob center (cx,cy) for fuzzy lookup.
+   */
+  private async updateClassifierScores(
+    tealBlobs: Blob[],
+    imageData: ImageData,
+    region: { x: number; y: number; width: number; height: number },
+  ): Promise<void> {
+    if (!this.classifier || !this.classifier.isLoaded()) return;
+
+    const crops = tealBlobs.map(b => ({
+      cropX: region.x + b.minX - 1,
+      cropY: region.y + b.minY - 1,
+      cropW: b.maxX - b.minX + 3,
+      cropH: b.maxY - b.minY + 3,
+    }));
+
+    try {
+      const rawScores = await this.classifier.scoreBlobsForLocalChampion(imageData, crops);
+
+      // Normalize scores across blobs: the model may have low absolute confidence
+      // but still correctly RANK blobs. Normalizing makes relative differences useful.
+      // E.g., raw [0.067, 0.000] → normalized [1.0, 0.0]
+      // Minimum raw threshold: if no blob exceeds this, the model is saying none of them
+      // match the local champion — don't inflate via normalization (prevents single wrong
+      // blob from getting cls=1.0 just because it's the only one detected).
+      const MIN_RAW_THRESHOLD = 0.005;
+      const maxRaw = Math.max(...rawScores);
+      const normalizedScores = maxRaw >= MIN_RAW_THRESHOLD
+        ? rawScores.map(s => s / maxRaw)
+        : rawScores.map(() => 0);
+
+      // Apply EMA smoothing to prevent single-frame misclassifications from flipping scores.
+      // Alpha=0.4 means ~60% prior + 40% new observation — dampens noise while still adapting.
+      const EMA_ALPHA = 0.4;
+      const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
+      const toleranceSq = tolerance * tolerance;
+
+      this.classifierScores.clear();
+      for (let i = 0; i < tealBlobs.length; i++) {
+        const key = tealBlobs[i].cx + ',' + tealBlobs[i].cy;
+        const norm = normalizedScores[i];
+
+        // Find closest prior smoothed score (blobs shift slightly between frames)
+        let priorSmoothed = -1;
+        let bestDistSq = Infinity;
+        for (const [sKey, sVal] of this.smoothedClassifierScores) {
+          const [sx, sy] = sKey.split(',').map(Number);
+          const dx = tealBlobs[i].cx - sx;
+          const dy = tealBlobs[i].cy - sy;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < toleranceSq && dSq < bestDistSq) {
+            bestDistSq = dSq;
+            priorSmoothed = sVal;
+          }
+        }
+
+        const smoothed = priorSmoothed >= 0
+          ? priorSmoothed * (1 - EMA_ALPHA) + norm * EMA_ALPHA
+          : norm; // first observation: use raw normalized
+        this.classifierScores.set(key, smoothed);
+      }
+
+      // Update smoothed scores map for next frame
+      this.smoothedClassifierScores.clear();
+      for (const [key, val] of this.classifierScores) {
+        this.smoothedClassifierScores.set(key, val);
+      }
+
+      // Diagnostic logging only every ~30s (240 frames at ~8fps)
+      if (this.classifierTick % 240 === 0) {
+        const details = tealBlobs.map((b, i) =>
+          '(' + b.cx + ',' + b.cy + ')raw=' + rawScores[i].toFixed(3) +
+          '/ema=' + (this.classifierScores.get(b.cx + ',' + b.cy) ?? 0).toFixed(2)
+        ).join(' | ');
+        console.log('[Tracking] Classifier scores: ' + details);
+      }
+    } catch (e) {
+      console.error('[Tracking] Classifier inference failed:', e);
+    }
+  }
+
+  /**
+   * Get cached classifier score for a blob.
+   * Uses fuzzy matching: finds the closest cached blob center within icon diameter.
+   */
+  private getClassifierScore(blob: Blob): number {
+    // Exact match first
+    const exact = this.classifierScores.get(blob.cx + ',' + blob.cy);
+    if (exact !== undefined) return exact;
+
+    // Fuzzy match: find closest cached center within icon diameter tolerance
+    const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
+    const toleranceSq = tolerance * tolerance;
+    let bestScore = 0;
+    let bestDistSq = Infinity;
+    for (const [key, score] of this.classifierScores) {
+      const [kx, ky] = key.split(',').map(Number);
+      const dx = blob.cx - kx;
+      const dy = blob.cy - ky;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < toleranceSq && distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestScore = score;
+      }
+    }
+    return bestScore;
+  }
+
   start(onPositionUpdate: (pos: Position) => void, fps: number = 8): void {
     this.onPositionUpdate = onPositionUpdate;
     const intervalMs = Math.round(1000 / fps);
@@ -219,7 +337,6 @@ export class TrackingService {
     this.lastPixelPos = null;
     this.deathPosition = null;
     this.lockedTickCount = 0;
-    this.selfScores.clear();
     this.scanFrameCount = 0;
   }
 
@@ -462,93 +579,19 @@ export class TrackingService {
     return count;
   }
 
+
   /**
-   * Sample the average interior color of a blob (the champion portrait inside the ring).
-   * Excludes pixels classified as teal/red border in the mask.
+   * Score movement path line evidence for a blob (0 = none, 1 = strong).
+   * Normalizes the raw white pixel count to [0, 1]: 8+ white pixels = full score.
    */
-  private sampleInteriorColor(
+  private whitePixelScore(
     blob: Blob,
-    imageData: ImageData,
-    mask: Uint8Array,
-    region: { x: number; y: number; width: number; height: number },
-  ): { r: number; g: number; b: number } | null {
-    const { data, width: imgW } = imageData;
-    const cx = blob.cx;
-    const cy = blob.cy;
-    // Sample a small square in the inner portion of the icon (exclude border ring)
-    const innerR = Math.max(3, Math.round(this.expectedIconDiam * 0.25));
-    let sumR = 0, sumG = 0, sumB = 0, count = 0;
-
-    for (let dy = -innerR; dy <= innerR; dy++) {
-      for (let dx = -innerR; dx <= innerR; dx++) {
-        const px = cx + dx;
-        const py = cy + dy;
-        if (px < 0 || px >= region.width || py < 0 || py >= region.height) continue;
-        const mIdx = py * region.width + px;
-        // Skip border pixels (teal=1, red=2)
-        if (mask[mIdx] !== 0) continue;
-        const srcIdx = ((region.y + py) * imgW + (region.x + px)) * 4;
-        sumR += data[srcIdx];
-        sumG += data[srcIdx + 1];
-        sumB += data[srcIdx + 2];
-        count++;
-      }
-    }
-    if (count < 5) return null;
-    return { r: sumR / count, g: sumG / count, b: sumB / count };
-  }
-
-  /**
-   * Compute the center of the camera viewport rectangle from the viewport mask.
-   * Returns null if insufficient viewport pixels detected.
-   */
-  private computeViewportCenter(viewportMask: Uint8Array, regionWidth: number, regionHeight: number): { x: number; y: number } | null {
-    let sumX = 0, sumY = 0, count = 0;
-    for (let y = 0; y < regionHeight; y++) {
-      for (let x = 0; x < regionWidth; x++) {
-        if (viewportMask[y * regionWidth + x] === 1) {
-          sumX += x;
-          sumY += y;
-          count++;
-        }
-      }
-    }
-    if (count < 20) return null; // too few viewport pixels
-    return { x: sumX / count, y: sumY / count };
-  }
-
-  /**
-   * Score how close a blob is to the viewport center (0 = far, 1 = at center).
-   * Players with locked camera or frequent spacebar centering will have the viewport
-   * centered on their champion. This is a strong positional hint.
-   */
-  private viewportProximityScore(blob: Blob, viewportCenter: { x: number; y: number } | null): number {
-    if (!viewportCenter) return 0.5; // neutral when no viewport detected
-    const dx = blob.cx - viewportCenter.x;
-    const dy = blob.cy - viewportCenter.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    // Full score within ~2 icon diameters of viewport center, drops to 0 at ~6 diameters
-    const maxDist = this.expectedIconDiam * 6;
-    return Math.max(0, 1 - dist / maxDist);
-  }
-
-  /** Color distance between two RGB values (squared Euclidean) */
-  private colorDistSq(a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }): number {
-    const dr = a.r - b.r;
-    const dg = a.g - b.g;
-    const db = a.b - b.b;
-    return dr * dr + dg * dg + db * db;
-  }
-
-  /**
-   * Create a position key for blob matching across frames.
-   * Quantize to grid cells sized to half the icon diameter.
-   */
-  private blobPosKey(blob: Blob): string {
-    const grid = Math.max(5, Math.round(this.expectedIconDiam / 2));
-    const gx = Math.round(blob.cx / grid);
-    const gy = Math.round(blob.cy / grid);
-    return gx + ',' + gy;
+    whiteMask: Uint8Array,
+    viewportMask: Uint8Array,
+    regionWidth: number,
+  ): number {
+    const count = this.countWhiteNearBlob(blob, whiteMask, viewportMask, regionWidth);
+    return Math.min(1, count / 8);
   }
 
   // --- Filtered image generation for overlay debug ---
@@ -563,31 +606,21 @@ export class TrackingService {
     const ctx = c.getContext('2d')!;
     const img = ctx.createImageData(w, h);
 
-    // Draw filtered pixels (teal, red, and white)
+    // Draw filtered pixels (teal, red, and movement path white)
     for (let i = 0; i < w * h; i++) {
       const pi = i * 4;
       if (mask[i] === 1) {
         img.data[pi] = 0; img.data[pi + 1] = 220; img.data[pi + 2] = 180; img.data[pi + 3] = 200;
       } else if (mask[i] === 2) {
         img.data[pi] = 255; img.data[pi + 1] = 50; img.data[pi + 2] = 50; img.data[pi + 3] = 200;
-      } else if (this.viewportMask) {
-        // Show white pixels: yellow = path line, dim gray = viewport (filtered out)
-        const wm = this.viewportMask;
-        // Check raw pixels for white
-        if (imageData && region) {
-          const srcIdx = ((region.y + Math.floor(i / w)) * imageData.width + (region.x + (i % w))) * 4;
-          const r = imageData.data[srcIdx];
-          const g = imageData.data[srcIdx + 1];
-          const b = imageData.data[srcIdx + 2];
-          if (r > 200 && g > 200 && b > 200) {
-            if (wm[i] === 1) {
-              // Viewport pixel — dim gray
-              img.data[pi] = 80; img.data[pi + 1] = 80; img.data[pi + 2] = 80; img.data[pi + 3] = 120;
-            } else {
-              // Path line pixel — bright yellow
-              img.data[pi] = 255; img.data[pi + 1] = 255; img.data[pi + 2] = 0; img.data[pi + 3] = 220;
-            }
-          }
+      } else if (imageData && region) {
+        // Show non-viewport white pixels as yellow (movement path line)
+        const srcIdx = ((region.y + Math.floor(i / w)) * imageData.width + (region.x + (i % w))) * 4;
+        const r = imageData.data[srcIdx];
+        const g = imageData.data[srcIdx + 1];
+        const b = imageData.data[srcIdx + 2];
+        if (r > 200 && g > 200 && b > 200 && this.viewportMask && this.viewportMask[i] === 0) {
+          img.data[pi] = 255; img.data[pi + 1] = 255; img.data[pi + 2] = 0; img.data[pi + 3] = 220;
         }
       }
     }
@@ -675,30 +708,22 @@ export class TrackingService {
           this.filteredImageUrl = this.generateFilteredImage(mask, region.width, region.height, iconBlobs, imageData, region);
         }
 
-        // Diagnostics every ~5 seconds
-        if (this.diagCounter++ % 40 === 0) {
-          const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
-          const redBlobs = iconBlobs.filter(b => b.color === 'red');
-          console.log('[Tracking] Blobs: total=' + allBlobs.length +
-            ' iconSized=' + iconBlobs.length +
-            ' teal=' + tealBlobs.length + ' red=' + redBlobs.length +
-            ' state=' + this.state);
-          for (const b of iconBlobs) {
-            const bw = b.maxX - b.minX + 1;
-            const bh = b.maxY - b.minY + 1;
-            console.log('[Tracking]   ' + b.color + ' blob: center=(' + b.cx + ',' + b.cy +
-              ') size=' + bw + 'x' + bh + ' pixels=' + b.pixels +
-              ' fill=' + b.fillRatio.toFixed(2));
-          }
-        }
+        this.diagCounter++;
 
         // Build white pixel masks (separating movement path from viewport rectangle)
         const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
 
+        // Run classifier every 4th frame to amortize cost
+        this.classifierTick++;
+        const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
+        if (this.classifier && this.classifierTick % 4 === 0 && tealBlobs.length > 0) {
+          this.updateClassifierScores(tealBlobs, imageData, region);
+        }
+
         if (this.state === TrackingState.SCANNING) {
-          this.handleScanning(iconBlobs, whiteMask, viewportMask, region, imageData, mask);
+          this.handleScanning(iconBlobs, whiteMask, viewportMask, region);
         } else if (this.state === TrackingState.LOCKED) {
-          this.handleLocked(iconBlobs, whiteMask, viewportMask, region, imageData, mask);
+          this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
         }
       };
       img.src = result.url;
@@ -706,19 +731,16 @@ export class TrackingService {
   }
 
   /**
-   * Scan: identify the local player's teal blob using movement path line detection.
-   * The local player's champion has a thin white line on the minimap when moving.
-   * We count white pixels in an annular region around each teal blob and accumulate
-   * evidence across frames. The blob with the most white pixel evidence is "self".
-   * Falls back to best ring score if no movement path is detected after several frames.
+   * Scan: initial identification of the local player's teal blob.
+   * Uses a unified composite score (classifier, peer avoidance, movement path, ring quality).
+   * Only used once at game start (or after respawn). Once locked, we never return to SCANNING —
+   * instead we hold position and re-acquire via classifier.
    */
   private handleScanning(
     iconBlobs: Blob[],
     whiteMask: Uint8Array,
     viewportMask: Uint8Array,
     region: { x: number; y: number; width: number; height: number },
-    imageData?: ImageData,
-    mask?: Uint8Array,
   ): void {
     if (!this.minimapRegion) return;
 
@@ -727,111 +749,41 @@ export class TrackingService {
 
     this.scanFrameCount++;
 
-    // Count non-viewport white pixels near each teal blob and accumulate scores
-    let bestWhite = 0;
-    let bestWhiteBlob: Blob | null = null;
+    // Wait ~1 second (8 frames at 8fps) for classifier EMA to stabilize.
+    // Without classifier, wait 4 frames for basic signal gathering.
+    const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
+    const warmupFrames = hasClassifier ? 8 : 4;
+    if (this.scanFrameCount < warmupFrames) {
+      if (this.onPositionUpdate && this.lastPosition) {
+        this.onPositionUpdate(this.lastPosition);
+      }
+      return;
+    }
+
+    let bestBlob = tealBlobs[0];
+    let bestScore = -Infinity;
+
     for (const b of tealBlobs) {
-      const white = this.countWhiteNearBlob(b, whiteMask, viewportMask, region.width);
-      const key = this.blobPosKey(b);
-      const prev = this.selfScores.get(key) || 0;
-      const score = prev * 0.7 + white;
-      this.selfScores.set(key, score);
+      const peerScore = this.peerAvoidanceScore(b);
+      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width);
+      const clsScore = this.getClassifierScore(b);
+      const ringScore = Math.min(1, b.pixels * (1 - b.fillRatio) / 200);
 
-      if (white > bestWhite) {
-        bestWhite = white;
-        bestWhiteBlob = b;
+      const score = hasClassifier
+        ? clsScore * 0.45 + whiteScore * 0.25 + peerScore * 0.20 + ringScore * 0.10
+        : peerScore * 0.40 + whiteScore * 0.35 + ringScore * 0.25;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestBlob = b;
       }
     }
 
-    // Log white pixel scores periodically
-    if (this.scanFrameCount % 8 === 0) {
-      const scores: string[] = [];
-      for (const b of tealBlobs) {
-        const key = this.blobPosKey(b);
-        const accumulated = this.selfScores.get(key) || 0;
-        const instant = this.countWhiteNearBlob(b, whiteMask, viewportMask, region.width);
-        scores.push('(' + b.cx + ',' + b.cy + ')white=' + instant + '/acc=' + accumulated.toFixed(1));
-      }
-      console.log('[Tracking] Self-ID scores: ' + scores.join(' | '));
-    }
-
-    // If a blob has clear white pixel evidence this frame (movement path line visible),
-    // lock onto it — but if multiple blobs have white evidence, prefer the one farther from peers.
-    if (bestWhiteBlob && bestWhite >= 3) {
-      // Check if another blob also has white evidence — pick the one with better peer avoidance
-      let chosenBlob = bestWhiteBlob;
-      if (tealBlobs.length > 1) {
-        let chosenScore = bestWhite * (0.5 + 0.5 * this.peerAvoidanceScore(bestWhiteBlob));
-        for (const b of tealBlobs) {
-          if (b === bestWhiteBlob) continue;
-          const white = this.countWhiteNearBlob(b, whiteMask, viewportMask, region.width);
-          if (white >= 3) {
-            const score = white * (0.5 + 0.5 * this.peerAvoidanceScore(b));
-            if (score > chosenScore) {
-              chosenScore = score;
-              chosenBlob = b;
-            }
-          }
-        }
-      }
-      this.lockOnBlob(chosenBlob, 'path-line(white=' + bestWhite + ')', imageData, mask, region);
-      return;
-    }
-
-    // Check accumulated scores: if one blob has significantly more evidence than others
-    let bestAccKey = '';
-    let bestAccScore = 0;
-    let secondBestAcc = 0;
-    for (const [key, score] of this.selfScores) {
-      if (score > bestAccScore) {
-        secondBestAcc = bestAccScore;
-        bestAccScore = score;
-        bestAccKey = key;
-      } else if (score > secondBestAcc) {
-        secondBestAcc = score;
-      }
-    }
-
-    // If accumulated evidence is strong and clearly better than runner-up, lock on
-    if (bestAccScore >= 5 && bestAccScore > secondBestAcc * 2) {
-      // Find the current teal blob closest to the accumulated winner position
-      const grid = Math.max(5, Math.round(this.expectedIconDiam / 2));
-      for (const b of tealBlobs) {
-        if (this.blobPosKey(b) === bestAccKey) {
-          this.lockOnBlob(b, 'accumulated(score=' + bestAccScore.toFixed(1) + ')', imageData, mask, region);
-          return;
-        }
-      }
-    }
-
-    // Fallback: after ~3 seconds of scanning with no white pixel evidence,
-    // use viewport proximity + peer avoidance to pick best candidate
-    if (this.scanFrameCount > 24) {
-      const vpCenter = this.computeViewportCenter(viewportMask, region.width, region.height);
-      let best = tealBlobs[0];
-      let bestFallbackScore = -Infinity;
-      for (const b of tealBlobs) {
-        const vpScore = this.viewportProximityScore(b, vpCenter);
-        const peerScore = this.peerAvoidanceScore(b);
-        const ringScore = b.pixels * (1 - b.fillRatio) / 200; // normalize to ~0-1
-        const score = vpScore * 0.4 + peerScore * 0.4 + ringScore * 0.2;
-        if (score > bestFallbackScore) {
-          bestFallbackScore = score;
-          best = b;
-        }
-      }
-      this.lockOnBlob(best, 'fallback(vp+peer, score=' + bestFallbackScore.toFixed(2) + ')', imageData, mask, region);
-      return;
-    }
-
-    // Still scanning — report last known position if we have one
-    if (this.onPositionUpdate && this.lastPosition) {
-      this.onPositionUpdate(this.lastPosition);
-    }
+    this.lockOnBlob(bestBlob, 'composite(score=' + bestScore.toFixed(2) + ')');
   }
 
   /** Lock onto a teal blob as the local player */
-  private lockOnBlob(blob: Blob, reason: string, imageData?: ImageData, mask?: Uint8Array, region?: { x: number; y: number; width: number; height: number }): void {
+  private lockOnBlob(blob: Blob, reason: string): void {
     if (!this.minimapRegion) return;
 
     const cx = this.minimapRegion.x + blob.cx;
@@ -841,15 +793,9 @@ export class TrackingService {
     this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
     this.state = TrackingState.LOCKED;
     this.lockedTickCount = 0;
-    this.selfScores.clear();
     this.scanFrameCount = 0;
     this.velocityX = 0;
     this.velocityY = 0;
-
-    // Capture interior color fingerprint
-    if (imageData && mask && region) {
-      this.fingerprint = this.sampleInteriorColor(blob, imageData, mask, region);
-    }
 
     const bw = blob.maxX - blob.minX + 1;
     const bh = blob.maxY - blob.minY + 1;
@@ -864,69 +810,28 @@ export class TrackingService {
   }
 
   /**
-   * Locked: follow the tracked blob using velocity prediction + color fingerprint + white-pixel correction.
-   * When multiple blobs are nearby, scores each candidate by:
-   *   1. Distance to PREDICTED position (using velocity from recent frames)
-   *   2. Color similarity to stored interior fingerprint
-   *   3. White pixel evidence (movement path line = unambiguous override)
+   * Locked: follow the tracked blob using a unified composite score.
+   * Never drops back to SCANNING — instead holds last known position when blobs vanish
+   * (death, camera pan, overlapping icons, teleport) and re-acquires via classifier
+   * when a confident match reappears anywhere on the minimap.
    */
   private handleLocked(
     iconBlobs: Blob[],
     whiteMask: Uint8Array,
     viewportMask: Uint8Array,
     region: { x: number; y: number; width: number; height: number },
-    imageData?: ImageData,
-    mask?: Uint8Array,
   ): void {
-    if (!this.lastPixelPos || !this.minimapRegion) {
-      this.state = TrackingState.SCANNING;
-      return;
-    }
+    if (!this.lastPixelPos || !this.minimapRegion) return;
 
     const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
+    const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
+
+    // No teal blobs at all — hold position
     if (tealBlobs.length === 0) {
+      if (this.lockedTickCount === 0) {
+        console.log('[Tracking] Holding position (no teal blobs)');
+      }
       this.lockedTickCount++;
-      if (this.lockedTickCount > 16) {
-        console.log('[Tracking] LOCKED -> SCANNING (no teal blobs for 2s)');
-        this.state = TrackingState.SCANNING;
-        this.lastPixelPos = null;
-        this.lockedTickCount = 0;
-      }
-      if (this.onPositionUpdate && this.lastPosition) {
-        this.onPositionUpdate(this.lastPosition);
-      }
-      return;
-    }
-
-    // Check white pixels for self-correction (unambiguous)
-    let bestWhite = 0;
-    let bestWhiteBlob: Blob | null = null;
-    for (const b of tealBlobs) {
-      const white = this.countWhiteNearBlob(b, whiteMask, viewportMask, region.width);
-      if (white > bestWhite) {
-        bestWhite = white;
-        bestWhiteBlob = b;
-      }
-    }
-
-    // White-pixel override: bypasses all other logic
-    if (bestWhiteBlob && bestWhite >= 3) {
-      const chosen = bestWhiteBlob;
-      const cx = this.minimapRegion.x + chosen.cx;
-      const cy = this.minimapRegion.y + chosen.cy;
-      const prevX = this.lastPixelPos.x - this.minimapRegion.x;
-      const prevY = this.lastPixelPos.y - this.minimapRegion.y;
-      // Update velocity
-      this.velocityX = this.velocityX * 0.5 + (chosen.cx - prevX) * 0.5;
-      this.velocityY = this.velocityY * 0.5 + (chosen.cy - prevY) * 0.5;
-      this.lastPixelPos = { x: cx, y: cy };
-      this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
-      this.lockedTickCount++;
-      // Update fingerprint periodically
-      if (imageData && mask && this.lockedTickCount % 4 === 0) {
-        const fp = this.sampleInteriorColor(chosen, imageData, mask, region);
-        if (fp) this.fingerprint = fp;
-      }
       if (this.onPositionUpdate && this.lastPosition) {
         this.onPositionUpdate(this.lastPosition);
       }
@@ -939,59 +844,45 @@ export class TrackingService {
     const predX = lastRegX + this.velocityX;
     const predY = lastRegY + this.velocityY;
 
-    // Max jump distance
-    const MAX_JUMP_PX = Math.max(15, Math.round(this.expectedIconDiam * 0.8));
+    // Max jump distance: allow up to 2x icon diameter per frame for normal movement.
+    // When holding position (lockedTickCount > 0), progressively expand the search
+    // radius so we can re-acquire a separating blob that moved during the hold.
+    // Grows by ~1 icon diameter per second (every 8 frames at 8fps).
+    const BASE_JUMP_PX = Math.max(20, Math.round(this.expectedIconDiam * 2.0));
+    const holdExpansion = this.lockedTickCount > 0
+      ? Math.round(this.expectedIconDiam * (this.lockedTickCount / 8))
+      : 0;
+    const MAX_JUMP_PX = BASE_JUMP_PX + holdExpansion;
     const maxJumpSq = MAX_JUMP_PX * MAX_JUMP_PX;
 
-    // Compute viewport center for proximity scoring
-    const viewportCenter = this.computeViewportCenter(viewportMask, region.width, region.height);
+    // Minimum classifier confidence to follow a blob. If the classifier is loaded
+    // and the best nearby blob scores below this, hold position instead of following
+    // a blob the classifier says is NOT our champion.
+    const CLS_FOLLOW_THRESHOLD = 0.2;
 
-    // Score each blob: position prediction + color + peer avoidance + viewport proximity
+    // --- Phase 1: Try normal frame-to-frame tracking (blobs within jump range) ---
     let bestBlob: Blob | null = null;
     let bestScore = -Infinity;
-    const scoringDetails: string[] = [];
+
     for (const b of tealBlobs) {
-      // Distance to last position (must be within jump range)
       const dxLast = b.cx - lastRegX;
       const dyLast = b.cy - lastRegY;
-      const distLastSq = dxLast * dxLast + dyLast * dyLast;
-      if (distLastSq > maxJumpSq) continue;
+      if (dxLast * dxLast + dyLast * dyLast > maxJumpSq) continue;
 
-      // Distance to predicted position (lower = better)
       const dxPred = b.cx - predX;
       const dyPred = b.cy - predY;
-      const distPredSq = dxPred * dxPred + dyPred * dyPred;
-      // Normalize: 0 at predicted pos, -1 at max jump distance
-      const posScore = 1 - distPredSq / maxJumpSq;
+      const posScore = 1 - (dxPred * dxPred + dyPred * dyPred) / maxJumpSq;
 
-      // Color fingerprint similarity (0 to 1, higher = more similar)
-      let colorScore = 0;
-      if (this.fingerprint && imageData && mask) {
-        const blobColor = this.sampleInteriorColor(b, imageData, mask, region);
-        if (blobColor) {
-          const distSq = this.colorDistSq(this.fingerprint, blobColor);
-          colorScore = 1 - Math.min(1, distSq / 30000);
-        }
-      }
-
-      // Peer avoidance: penalize blobs near known peer positions
       const peerScore = this.peerAvoidanceScore(b);
+      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width);
+      const clsScore = this.getClassifierScore(b);
 
-      // Viewport proximity: prefer blob closer to camera viewport center
-      const vpScore = this.viewportProximityScore(b, viewportCenter);
+      // If classifier is loaded, reject blobs it confidently says aren't our champion
+      if (hasClassifier && clsScore < CLS_FOLLOW_THRESHOLD) continue;
 
-      // Combined score: balanced across all signals
-      const score = posScore * 0.35 + colorScore * 0.1 + peerScore * 0.25 + vpScore * 0.3;
-
-      // Collect scoring details for diagnostics
-      if (this.lockedTickCount % 40 === 0) {
-        scoringDetails.push('(' + b.cx + ',' + b.cy + ')' +
-          ' pos=' + posScore.toFixed(2) +
-          ' color=' + colorScore.toFixed(2) +
-          ' peer=' + peerScore.toFixed(2) +
-          ' vp=' + vpScore.toFixed(2) +
-          ' total=' + score.toFixed(2));
-      }
+      const score = hasClassifier
+        ? posScore * 0.35 + clsScore * 0.30 + whiteScore * 0.20 + peerScore * 0.15
+        : posScore * 0.45 + peerScore * 0.30 + whiteScore * 0.25;
 
       if (score > bestScore) {
         bestScore = score;
@@ -999,26 +890,56 @@ export class TrackingService {
       }
     }
 
-    // Log scoring details periodically
-    if (this.lockedTickCount % 40 === 0 && scoringDetails.length > 0) {
-      console.log('[Tracking] Blob scores: ' + scoringDetails.join(' | '));
-      console.log('[Tracking] Peers: ' + this.peerPixelPositions.length +
-        ' positions=' + this.peerPixelPositions.map(p => '(' + Math.round(p.x) + ',' + Math.round(p.y) + ')').join(',') +
-        ' vpCenter=' + (viewportCenter ? '(' + Math.round(viewportCenter.x) + ',' + Math.round(viewportCenter.y) + ')' : 'none'));
+    // --- Phase 2: No blob in jump range — try classifier re-acquisition ---
+    // Handles teleport, respawn, camera pan, blob overlap recovery.
+    // Jump to any teal blob with high classifier confidence regardless of distance.
+    // After holding for a while (>1s), lower the threshold to recover faster.
+    if (!bestBlob && hasClassifier) {
+      const CLS_REACQUIRE_THRESHOLD = this.lockedTickCount > 8 ? 0.35 : 0.5;
+      let bestClsBlob: Blob | null = null;
+      let bestClsScore = 0;
+
+      for (const b of tealBlobs) {
+        const clsScore = this.getClassifierScore(b);
+        if (clsScore >= CLS_REACQUIRE_THRESHOLD && clsScore > bestClsScore) {
+          bestClsScore = clsScore;
+          bestClsBlob = b;
+        }
+      }
+
+      if (bestClsBlob) {
+        const cx = this.minimapRegion.x + bestClsBlob.cx;
+        const cy = this.minimapRegion.y + bestClsBlob.cy;
+        this.lastPixelPos = { x: cx, y: cy };
+        this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.lockedTickCount++;
+        console.log('[Tracking] Re-acquired via classifier (cls=' + bestClsScore.toFixed(2) +
+          '): pixel(' + cx + ',' + cy + ')' +
+          ' game(' + Math.round(this.lastPosition.x) + ',' + Math.round(this.lastPosition.y) + ')');
+        if (this.onPositionUpdate && this.lastPosition) {
+          this.onPositionUpdate(this.lastPosition);
+        }
+        return;
+      }
     }
 
+    // --- Phase 3: No blob matched at all — hold position ---
     if (!bestBlob) {
-      this.lockedTickCount++;
-      if (this.lockedTickCount > 16) {
-        console.log('[Tracking] LOCKED -> SCANNING (no nearby blob for 2s, maxJump=' + MAX_JUMP_PX + ')');
-        this.state = TrackingState.SCANNING;
-        this.lastPixelPos = null;
-        this.lockedTickCount = 0;
+      if (this.lockedTickCount === 0) {
+        console.log('[Tracking] Holding position (no match in range)');
       }
+      this.lockedTickCount++;
       if (this.onPositionUpdate && this.lastPosition) {
         this.onPositionUpdate(this.lastPosition);
       }
       return;
+    }
+
+    // Log when resuming tracking after a hold
+    if (this.lockedTickCount > 0) {
+      console.log('[Tracking] Resumed tracking after hold (' + this.lockedTickCount + ' frames)');
     }
 
     const cx = this.minimapRegion.x + bestBlob.cx;
@@ -1030,22 +951,7 @@ export class TrackingService {
 
     this.lastPixelPos = { x: cx, y: cy };
     this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
-    this.lockedTickCount++;
-
-    // Update fingerprint periodically (every ~0.5s)
-    if (imageData && mask && this.lockedTickCount % 4 === 0) {
-      const fp = this.sampleInteriorColor(bestBlob, imageData, mask, region);
-      if (fp) this.fingerprint = fp;
-    }
-
-    // Log every ~5 seconds
-    if (this.lockedTickCount % 40 === 0) {
-      console.log('[Tracking] Locked: pixel(' + cx + ',' + cy + ')' +
-        ' game(' + Math.round(this.lastPosition.x) + ',' + Math.round(this.lastPosition.y) + ')' +
-        ' vel=(' + this.velocityX.toFixed(1) + ',' + this.velocityY.toFixed(1) + ')' +
-        ' fp=' + (this.fingerprint ? Math.round(this.fingerprint.r) + ',' + Math.round(this.fingerprint.g) + ',' + Math.round(this.fingerprint.b) : 'none') +
-        ' tealBlobs=' + tealBlobs.length);
-    }
+    this.lockedTickCount = 0;
 
     if (this.onPositionUpdate && this.lastPosition) {
       this.onPositionUpdate(this.lastPosition);
