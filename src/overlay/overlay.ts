@@ -355,22 +355,17 @@ function renderState(state: OverlayState): void {
   }
 
   // Debug info: tracking state + position (only when debug enabled)
-  let dbgEl = playerList.querySelector('.debug-info') as HTMLElement | null;
+  const dbgEl = document.getElementById('debug-info')!;
   if (debugEnabled && (state.trackingState || state.lastPosition)) {
-    if (!dbgEl) {
-      dbgEl = document.createElement('div');
-      dbgEl.className = 'empty-state debug-info';
-      dbgEl.style.fontSize = '10px';
-      playerList.appendChild(dbgEl);
-    }
     const parts: string[] = [];
     if (state.trackingState) parts.push('tracking: ' + state.trackingState);
     if (state.lastPosition) {
       parts.push('pos: (' + Math.round(state.lastPosition.x) + ',' + Math.round(state.lastPosition.y) + ')');
     }
     dbgEl.textContent = parts.join(' | ');
-  } else if (dbgEl) {
-    dbgEl.remove();
+    dbgEl.classList.remove('hidden');
+  } else {
+    dbgEl.classList.add('hidden');
   }
 
   // Update tracking dot position on minimap border (only when debug enabled)

@@ -167,7 +167,7 @@ html, body {
   padding: 8px 10px;
   border-top: 1px solid rgba(100, 120, 160, 0.2);
 }
-.hidden { display: none; }
+.hidden { display: none !important; }
 
 .setting-row {
   display: flex;
