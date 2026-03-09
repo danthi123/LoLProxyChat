@@ -1,5 +1,9 @@
 const path = require('path');
+const webpack = require('webpack');
 const CopyPlugin = require('copy-webpack-plugin');
+
+// Load .env if present (fall back to empty strings)
+try { require('dotenv').config(); } catch (_) { /* dotenv optional */ }
 
 module.exports = {
   mode: 'development',
@@ -26,6 +30,10 @@ module.exports = {
     clean: true,
   },
   plugins: [
+    new webpack.DefinePlugin({
+      __SUPABASE_URL__: JSON.stringify(process.env.SUPABASE_URL || ''),
+      __SUPABASE_ANON_KEY__: JSON.stringify(process.env.SUPABASE_ANON_KEY || ''),
+    }),
     new CopyPlugin({
       patterns: [
         { from: 'manifest.json', to: '.' },

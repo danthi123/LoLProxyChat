@@ -1,3 +1,12 @@
 node_modules/
 dist/
 .env
+
+# Large generated assets (not needed for build)
+assets/champion-circles/
+scripts/synthetic-data/
+src/data/champion-fingerprints.json
+
+# Temp/logs
+logs.txt
+supabase/.temp/

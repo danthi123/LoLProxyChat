@@ -3,6 +3,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 
 const SECRET_KEY_HEX = Deno.env.get('POSITION_ENCRYPTION_KEY') || '';
 const MAX_HEARING_RANGE = 1200;
+const BLOB_MAX_AGE_MS = 10000; // 10s to handle clock skew
 
 interface RequestBody {
   myPosition: { x: number; y: number };
@@ -14,15 +15,24 @@ interface ResponseBody {
   peerVolumes: Record<string, number>;
 }
 
+let cachedKey: CryptoKey | null = null;
+
 async function getKey(): Promise<CryptoKey> {
+  if (cachedKey) return cachedKey;
+  if (!/^[0-9a-fA-F]{64}$/.test(SECRET_KEY_HEX)) {
+    throw new Error('POSITION_ENCRYPTION_KEY must be 64 hex chars (256-bit)');
+  }
   const keyBytes = hexToBytes(SECRET_KEY_HEX);
-  return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  cachedKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return cachedKey;
 }
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    const byte = parseInt(hex.substring(i, i + 2), 16);
+    if (Number.isNaN(byte)) throw new Error('Invalid hex in encryption key');
+    bytes[i / 2] = byte;
   }
   return bytes;
 }
@@ -46,8 +56,8 @@ async function decryptPosition(key: CryptoKey, blob: string): Promise<{ x: numbe
     const ciphertext = combined.slice(12);
     const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
     const payload = JSON.parse(new TextDecoder().decode(decrypted));
-    // Reject blobs older than 5 seconds
-    if (Date.now() - payload.t > 5000) return null;
+    // Reject blobs older than BLOB_MAX_AGE_MS (handles clock skew)
+    if (typeof payload.t !== 'number' || Math.abs(Date.now() - payload.t) > BLOB_MAX_AGE_MS) return null;
     return { x: payload.x, y: payload.y };
   } catch {
     return null;
@@ -74,6 +84,22 @@ serve(async (req: Request) => {
 
   try {
     const body: RequestBody = await req.json();
+
+    // Validate input
+    if (!body.myPosition || typeof body.myPosition.x !== 'number' || typeof body.myPosition.y !== 'number' ||
+        !isFinite(body.myPosition.x) || !isFinite(body.myPosition.y)) {
+      return new Response(JSON.stringify({ error: 'Invalid position' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      });
+    }
+    if (body.peers && typeof body.peers !== 'object') {
+      return new Response(JSON.stringify({ error: 'Invalid peers' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      });
+    }
+
     const key = await getKey();
 
     // Encrypt caller's position

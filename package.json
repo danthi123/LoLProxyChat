@@ -8,6 +8,7 @@
   "scripts": {
     "build": "webpack",
     "build:prod": "webpack --mode production",
+    "update-icons": "node scripts/update-champion-icons.js",
     "test": "jest",
     "test:watch": "jest --watch"
   },
@@ -19,7 +20,10 @@
     "@overwolf/types": "^3.24.10",
     "@types/jest": "^30.0.0",
     "copy-webpack-plugin": "^14.0.0",
+    "dotenv": "^17.3.1",
     "jest": "^30.2.0",
+    "jimp": "^0.22.12",
+    "sharp": "^0.34.5",
     "ts-jest": "^29.4.6",
     "ts-loader": "^9.5.4",
     "typescript": "^5.9.3",

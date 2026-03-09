@@ -36,8 +36,9 @@ export function normalizedCrossCorrelation(
   const varT = sumTT / count - meanT * meanT;
   const cov = sumPT / count - meanP * meanT;
 
-  const denom = Math.sqrt(varP * varT);
-  if (denom < 1e-6) return 0;
+  const product = varP * varT;
+  if (product < 1e-12) return 0;
+  const denom = Math.sqrt(product);
 
   return cov / denom;
 }
@@ -76,6 +77,8 @@ export function findBestMatch(
 
   const halfW = Math.floor(templateW / 2);
   const halfH = Math.floor(templateH / 2);
+  const numPixels = templateW * templateH;
+  const patch = new Uint8Array(numPixels * 3);
 
   for (let sy = centerY - searchRadius; sy <= centerY + searchRadius; sy++) {
     for (let sx = centerX - searchRadius; sx <= centerX + searchRadius; sx++) {
@@ -86,8 +89,6 @@ export function findBestMatch(
           startX + templateW > imgW || startY + templateH > imgH) continue;
 
       // Extract patch RGB from image
-      const numPixels = templateW * templateH;
-      const patch = new Uint8Array(numPixels * 3);
       for (let py = 0; py < templateH; py++) {
         for (let px = 0; px < templateW; px++) {
           const imgI = ((startY + py) * imgW + (startX + px)) * 4;

@@ -6,30 +6,54 @@
   <link rel="stylesheet" href="overlay.css">
 </head>
 <body>
-  <div id="proxchat-root" class="proxchat-widget">
-    <div id="drag-handle" class="widget-header">
-      <span class="widget-title">ProxChat</span>
-      <div class="header-controls">
-        <button id="btn-self-mute" class="icon-btn" title="Toggle Self Mute">MIC</button>
-        <button id="btn-mute-all" class="icon-btn" title="Mute All">VOL</button>
-        <button id="btn-settings" class="icon-btn" title="Settings">SET</button>
+  <div id="proxchat-root">
+    <!-- Left: ProxChat panel -->
+    <div id="panel" class="panel">
+      <div id="drag-handle" class="widget-header">
+        <span class="widget-title">ProxChat</span>
+        <div class="header-controls">
+          <button id="btn-self-mute" class="icon-btn" title="Toggle Self Mute">MIC</button>
+          <button id="btn-mute-all" class="icon-btn" title="Mute All">VOL</button>
+          <button id="btn-settings" class="icon-btn" title="Settings">SET</button>
+        </div>
+      </div>
+      <div id="player-list" class="player-list">
+        <div class="empty-state">Waiting for nearby players...</div>
+      </div>
+      <div id="settings-panel" class="settings-panel hidden">
+        <div class="setting-row">
+          <label>Input Mode</label>
+          <select id="input-mode">
+            <option value="vad">Voice Activity</option>
+            <option value="ptt">Push to Talk</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>Mic Volume</label>
+          <input id="input-volume" type="range" min="0" max="100" value="100">
+        </div>
+        <div class="setting-row">
+          <label>Scan Rate</label>
+          <div class="setting-value-group">
+            <input id="input-scan-rate" type="range" min="1" max="30" value="15">
+            <span id="scan-rate-label" class="setting-value-label">15</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>Debug Overlay</label>
+          <button id="btn-debug" class="icon-btn">OFF</button>
+        </div>
       </div>
     </div>
-    <div id="player-list" class="player-list">
-      <div class="empty-state">Waiting for nearby players...</div>
-    </div>
-    <div id="settings-panel" class="settings-panel hidden">
-      <div class="setting-row">
-        <label>Input Mode</label>
-        <select id="input-mode">
-          <option value="vad">Voice Activity</option>
-          <option value="ptt">Push to Talk</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label>Input Volume</label>
-        <input id="input-volume" type="range" min="0" max="100" value="100">
-      </div>
+
+    <!-- Right: Minimap calibration border -->
+    <div id="minimap-border">
+      <div id="tracking-dot"></div>
+      <div id="corner-tr" class="corner"></div>
+      <div id="corner-br" class="corner"></div>
+      <div id="edge-top" class="edge"></div>
+      <div id="edge-right" class="edge"></div>
+      <div id="edge-bottom" class="edge"></div>
     </div>
   </div>
   <script src="overlay.js"></script>

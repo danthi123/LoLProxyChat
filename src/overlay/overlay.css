@@ -1,19 +1,33 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body {
+html, body {
   background: transparent;
   overflow: hidden;
   font-family: 'Segoe UI', sans-serif;
   color: #cdcdcd;
   font-size: 12px;
   user-select: none;
+  width: 100%;
+  height: 100%;
 }
 
-.proxchat-widget {
+#proxchat-root {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Left panel (fixed width) --- */
+.panel {
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
   background: rgba(10, 12, 18, 0.85);
   border: 1px solid rgba(100, 120, 160, 0.3);
   border-radius: 6px;
-  width: 240px;
   backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
 }
 
 .widget-header {
@@ -84,27 +98,35 @@ body {
   text-overflow: ellipsis;
 }
 
-.player-volume-bar {
-  width: 40px;
+.player-volume {
+  width: 50px;
   height: 4px;
-  background: rgba(100, 120, 160, 0.2);
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(100, 120, 160, 0.3);
   border-radius: 2px;
-  overflow: hidden;
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
 }
-.player-volume-fill {
-  height: 100%;
-  background: #4a8;
-  border-radius: 2px;
-  transition: width 0.15s;
+.player-volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  background: #8892a8;
+  border-radius: 50%;
+  cursor: pointer;
 }
+.player-volume::-webkit-slider-thumb:hover { background: #cdcdcd; }
 
 .player-mute-btn {
   background: none;
   border: none;
   color: #8892a8;
   cursor: pointer;
-  font-size: 11px;
-  padding: 2px;
+  font-size: 10px;
+  padding: 2px 4px;
+  flex-shrink: 0;
 }
 .player-mute-btn.muted { color: #e74c4c; }
 
@@ -126,6 +148,8 @@ body {
   padding: 4px 0;
 }
 .setting-row label { font-size: 11px; color: #8892a8; }
+.setting-value-group { display: flex; align-items: center; gap: 4px; }
+.setting-value-label { font-size: 10px; color: #8892a8; min-width: 16px; text-align: right; }
 .setting-row select, .setting-row input[type="range"] {
   background: rgba(20, 25, 35, 0.9);
   border: 1px solid rgba(100, 120, 160, 0.3);
@@ -138,3 +162,44 @@ body {
 .player-list::-webkit-scrollbar { width: 4px; }
 .player-list::-webkit-scrollbar-track { background: transparent; }
 .player-list::-webkit-scrollbar-thumb { background: rgba(100, 120, 160, 0.3); border-radius: 2px; }
+
+/* --- Right: Minimap calibration border --- */
+#minimap-border {
+  flex: 1;
+  position: relative;
+  margin-left: 4px;
+  /* Debug border hidden by default, toggled via JS */
+}
+
+/* Tracking dot (shows detected position) */
+#tracking-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: rgba(255, 40, 40, 0.9);
+  border: 1px solid #fff;
+  border-radius: 50%;
+  z-index: 15;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  display: none;
+}
+
+/* Corner resize handles */
+.corner {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  z-index: 10;
+}
+#corner-tr { top: -2px; right: -2px; cursor: ne-resize; }
+#corner-br { bottom: -2px; right: -2px; cursor: se-resize; }
+
+/* Edge handles for resize (right/bottom extend the minimap section) */
+.edge {
+  position: absolute;
+  z-index: 5;
+}
+#edge-top { top: 0; left: 0; right: 18px; height: 10px; cursor: n-resize; }
+#edge-right { right: 0; top: 18px; bottom: 18px; width: 10px; cursor: e-resize; }
+#edge-bottom { bottom: 0; left: 0; right: 18px; height: 10px; cursor: s-resize; }

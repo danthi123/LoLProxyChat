@@ -1,5 +1,3 @@
-import { Position, MapType, MAP_DIMENSIONS } from './types';
-
 export interface MinimapBounds {
   x: number;
   y: number;
@@ -8,24 +6,14 @@ export interface MinimapBounds {
 }
 
 export function getMinimapBounds(screenWidth: number, screenHeight: number): MinimapBounds {
-  const minimapSize = Math.round(screenHeight * 0.237); // ~256px at 1080p
+  // Capture a generous bottom-right region that contains the minimap
+  // regardless of HUD scale. The minimap is always in the bottom-right
+  // and can be up to ~30% of screen height at max HUD scale.
+  const captureSize = Math.round(screenHeight * 0.35);
   return {
-    x: screenWidth - minimapSize - Math.round(screenWidth * 0.005),
-    y: screenHeight - minimapSize - Math.round(screenHeight * 0.005),
-    width: minimapSize,
-    height: minimapSize,
-  };
-}
-
-export function pixelToGameUnits(
-  pixelX: number,
-  pixelY: number,
-  mapType: MapType,
-  minimapSize: { width: number; height: number },
-): Position {
-  const dims = MAP_DIMENSIONS[mapType];
-  return {
-    x: (pixelX / minimapSize.width) * dims.width,
-    y: dims.height - (pixelY / minimapSize.height) * dims.height,
+    x: screenWidth - captureSize,
+    y: screenHeight - captureSize,
+    width: captureSize,
+    height: captureSize,
   };
 }

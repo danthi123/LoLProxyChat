@@ -22,6 +22,7 @@ export class AudioService {
   private analyser: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
   private outputStream: MediaStream | null = null;
+  private vadBuffer: Uint8Array<ArrayBuffer> | null = null;
   private vadActive = false;
 
   // PTT state
@@ -43,11 +44,16 @@ export class AudioService {
 
     // Set up VAD analyser with input gain
     this.audioContext = new AudioContext();
+    // Resume if suspended (created without user gesture in Overwolf background)
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
     const source = this.audioContext.createMediaStreamSource(this.localStream);
     this.gainNode = this.audioContext.createGain();
     this.gainNode.gain.value = this.settings.inputVolume;
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 512;
+    this.vadBuffer = new Uint8Array(this.analyser.frequencyBinCount);
     source.connect(this.gainNode);
     this.gainNode.connect(this.analyser);
     const destination = this.audioContext.createMediaStreamDestination();
@@ -82,8 +88,8 @@ export class AudioService {
   // Called periodically (~20 times/sec) to check voice activity
   private vadLogCounter = 0;
   updateVAD(): void {
-    if (this.settings.inputMode !== 'vad' || !this.analyser) return;
-    const data = new Uint8Array(this.analyser.frequencyBinCount);
+    if (this.settings.inputMode !== 'vad' || !this.analyser || !this.vadBuffer) return;
+    const data = this.vadBuffer;
     this.analyser.getByteFrequencyData(data);
     const average = data.reduce((sum, val) => sum + val, 0) / data.length;
     const threshold = 15; // Lower threshold for easier voice detection
@@ -105,7 +111,7 @@ export class AudioService {
   }
 
   // Connect to a new peer
-  async connectToPeer(remoteName: string): Promise<void> {
+  async connectToPeer(remoteName: string, isInitiator?: boolean): Promise<void> {
     if (this.peers.has(remoteName)) return;
 
     console.log('[Audio] Connecting to peer:', remoteName);
@@ -125,8 +131,11 @@ export class AudioService {
       });
     };
 
-    // Alphabetically first name creates the offer (deterministic initiator)
-    if (this.localName < remoteName) {
+    // Initiator creates data channel + offer
+    const shouldInitiate = isInitiator ?? (this.localName < remoteName);
+    if (shouldInitiate) {
+      // Create data channel BEFORE offer so it's included in the SDP
+      peer.createDataChannel();
       console.log('[Audio] Creating offer (initiator) to:', remoteName);
       try {
         const offer = await peer.createOffer();
@@ -194,17 +203,14 @@ export class AudioService {
     for (const [name, volume] of Object.entries(volumes)) {
       const peer = this.peers.get(name);
       if (!peer) continue;
-      if (this.muteAll || this.mutedPlayers.has(name)) {
-        peer.mute();
-        continue;
-      }
       const playerVolume = this.settings.playerVolumes[name] ?? 1.0;
       const finalVol = volume * playerVolume;
+      // Always update volume so it's correct when unmuted
       peer.setVolume(finalVol);
-      if (finalVol > 0) {
-        peer.unmute();
-      } else {
+      if (this.muteAll || this.mutedPlayers.has(name) || finalVol === 0) {
         peer.mute();
+      } else {
+        peer.unmute();
       }
     }
   }
@@ -218,8 +224,8 @@ export class AudioService {
 
   toggleMuteAll(): boolean {
     this.muteAll = !this.muteAll;
-    for (const [, peer] of this.peers) {
-      if (this.muteAll) {
+    for (const [name, peer] of this.peers) {
+      if (this.muteAll || this.mutedPlayers.has(name)) {
         peer.mute();
       } else {
         peer.unmute();
@@ -243,6 +249,16 @@ export class AudioService {
       }
     }
     return this.mutedPlayers.has(name);
+  }
+
+  setPlayerVolume(name: string, volume: number): void {
+    this.settings.playerVolumes[name] = Math.max(0, Math.min(1, volume));
+    // Apply immediately if peer exists
+    const peer = this.peers.get(name);
+    if (peer) {
+      const proximityVol = 1.0; // will be updated next volume tick
+      peer.setVolume(this.settings.playerVolumes[name] * proximityVol);
+    }
   }
 
   isSelfMuted(): boolean { return this.selfMuted; }
@@ -274,6 +290,8 @@ export class AudioService {
       peer.close();
     }
     this.peers.clear();
+    this.outputStream?.getTracks().forEach((t) => t.stop());
+    this.outputStream = null;
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.audioContext?.close();

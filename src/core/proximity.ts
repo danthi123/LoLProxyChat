@@ -10,7 +10,7 @@ export function calculateVolume(distance: number): number {
   if (distance >= MAX_HEARING_RANGE) return 0.0;
   if (distance <= 0) return 1.0;
   const normalized = distance / MAX_HEARING_RANGE;
-  return Math.max(0, 1 - Math.log1p(normalized * (Math.E - 1)) / 1);
+  return Math.max(0, 1 - Math.log1p(normalized * (Math.E - 1)));
 }
 
 export function isInRange(distance: number): boolean {

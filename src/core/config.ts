@@ -1,6 +1,13 @@
-// Configure these values - see docs/SETUP.md
-export const SUPABASE_URL = 'https://YOUR_PROJECT_ID.supabase.co';
-export const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY_HERE';
+// Injected at build time via webpack.DefinePlugin — see .env.example
+declare const __SUPABASE_URL__: string;
+declare const __SUPABASE_ANON_KEY__: string;
+
+export const SUPABASE_URL: string = typeof __SUPABASE_URL__ !== 'undefined'
+  ? __SUPABASE_URL__
+  : 'https://your-project.supabase.co';
+export const SUPABASE_ANON_KEY: string = typeof __SUPABASE_ANON_KEY__ !== 'undefined'
+  ? __SUPABASE_ANON_KEY__
+  : '';
 
 // WebRTC STUN/TURN servers
 export const ICE_SERVERS: RTCIceServer[] = [

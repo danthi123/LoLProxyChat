@@ -43,7 +43,10 @@ export class SignalingService {
     this.localName = localName;
 
     this.channel = this.supabase.channel('game:' + roomId, {
-      config: { presence: { key: localName } },
+      config: {
+        broadcast: { ack: false, self: false },
+        presence: { key: localName },
+      },
     });
 
     // Position broadcasts

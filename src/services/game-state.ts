@@ -69,8 +69,12 @@ export class GameStateService {
   private detectMapType(gameMode: string): MapType {
     const mode = gameMode.toLowerCase();
     if (mode.includes('aram') || mode.includes('howling')) return 'howling_abyss';
-    if (mode.includes('classic') || mode.includes('ranked') || mode.includes('normal'))
+    // Practice tool, custom games, and standard modes all use Summoner's Rift
+    if (
+      mode.includes('classic') || mode.includes('ranked') || mode.includes('normal') ||
+      mode.includes('practice') || mode.includes('custom') || mode.includes('tutorial')
+    )
       return 'summoners_rift';
-    return 'unknown';
+    return 'summoners_rift'; // Default to SR rather than unknown
   }
 }

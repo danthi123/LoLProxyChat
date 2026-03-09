@@ -5,6 +5,8 @@ export class PeerConnection {
   private remoteStream: MediaStream = new MediaStream();
   private audioElement: HTMLAudioElement;
   private dataChannel: RTCDataChannel | null = null;
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private hasRemoteDescription = false;
   readonly remoteName: string;
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
@@ -52,6 +54,9 @@ export class PeerConnection {
     this.dataChannel.onmessage = (event) => {
       if (this.onDataMessage) this.onDataMessage(event.data);
     };
+    this.dataChannel.onerror = (event) => {
+      console.warn('[WebRTC] Data channel error with', this.remoteName, ':', event);
+    };
   }
 
   createDataChannel(): void {
@@ -79,6 +84,8 @@ export class PeerConnection {
 
   async handleOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    this.hasRemoteDescription = true;
+    await this.flushPendingCandidates();
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
     return answer;
@@ -86,10 +93,23 @@ export class PeerConnection {
 
   async handleAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+    this.hasRemoteDescription = true;
+    await this.flushPendingCandidates();
   }
 
   async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+    if (!this.hasRemoteDescription) {
+      this.pendingCandidates.push(candidate);
+      return;
+    }
     await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+
+  private async flushPendingCandidates(): Promise<void> {
+    for (const c of this.pendingCandidates) {
+      await this.pc.addIceCandidate(new RTCIceCandidate(c));
+    }
+    this.pendingCandidates = [];
   }
 
   setVolume(volume: number): void {
@@ -106,6 +126,7 @@ export class PeerConnection {
 
   close(): void {
     this.dataChannel?.close();
+    this.remoteStream.getTracks().forEach((t) => t.stop());
     this.pc.close();
     this.audioElement.pause();
     this.audioElement.srcObject = null;
