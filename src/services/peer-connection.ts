@@ -78,6 +78,7 @@ export class PeerConnection {
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {
     const offer = await this.pc.createOffer();
+    offer.sdp = this.enhanceOpusSdp(offer.sdp || '');
     await this.pc.setLocalDescription(offer);
     return offer;
   }
@@ -87,8 +88,32 @@ export class PeerConnection {
     this.hasRemoteDescription = true;
     await this.flushPendingCandidates();
     const answer = await this.pc.createAnswer();
+    answer.sdp = this.enhanceOpusSdp(answer.sdp || '');
     await this.pc.setLocalDescription(answer);
     return answer;
+  }
+
+  /**
+   * Modify SDP to set Opus bitrate to 128kbps and enable DTX.
+   * DTX (Discontinuous Transmission) stops sending packets during silence,
+   * saving bandwidth without affecting audio quality.
+   */
+  private enhanceOpusSdp(sdp: string): string {
+    return sdp.replace(
+      /a=fmtp:111 (.*)/g,
+      (match, params) => {
+        let enhanced = params;
+        // Set max bitrate to 128kbps
+        if (!enhanced.includes('maxaveragebitrate')) {
+          enhanced += ';maxaveragebitrate=128000';
+        }
+        // Enable DTX (silence suppression)
+        if (!enhanced.includes('usedtx')) {
+          enhanced += ';usedtx=1';
+        }
+        return 'a=fmtp:111 ' + enhanced;
+      }
+    );
   }
 
   async handleAnswer(answer: RTCSessionDescriptionInit): Promise<void> {

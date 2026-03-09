@@ -37,8 +37,8 @@ export async function createRnnoiseNode(audioContext: AudioContext): Promise<Rnn
   let inputBuffer = new Float32Array(0);
   let vadScore = 0;
 
-  // Use 4096 buffer for ScriptProcessorNode (good balance of latency vs efficiency)
-  const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+  // Use 2048 buffer for ScriptProcessorNode (~42ms latency at 48kHz)
+  const scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
 
   scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {
     const input = event.inputBuffer.getChannelData(0);
