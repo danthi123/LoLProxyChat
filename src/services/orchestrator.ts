@@ -21,7 +21,7 @@ export class Orchestrator {
 
   private localSummonerName = '';
   private peerStates: Map<string, PeerState> = new Map();
-  private vadIntervalId: number | null = null;
+  // VAD is now handled internally by AudioService (RNNoise polling)
   private volumeTickId: number | null = null;
   private configPollId: number | null = null;
   private gepStarted = false;
@@ -266,10 +266,7 @@ export class Orchestrator {
       }
     });
 
-    // Start VAD update loop (20 times/sec)
-    this.vadIntervalId = window.setInterval(() => {
-      this.audio?.updateVAD();
-    }, 50) as unknown as number;
+    // VAD is handled internally by AudioService (RNNoise polling)
   }
 
   private async positionTick(): Promise<void> {
@@ -654,10 +651,6 @@ export class Orchestrator {
     this.positionTickRunning = false;
     this.sessionActive = false;
 
-    if (this.vadIntervalId !== null) {
-      clearInterval(this.vadIntervalId);
-      this.vadIntervalId = null;
-    }
     if (this.volumeTickId !== null) {
       clearInterval(this.volumeTickId);
       this.volumeTickId = null;

@@ -47,6 +47,8 @@ module.exports = {
         // ONNX Runtime WASM + MJS loader files (both required for WASM backend)
         { from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded*.wasm', to: 'background/[name][ext]' },
         { from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded*.mjs', to: 'background/[name][ext]' },
+        // RNNoise WASM (noise suppression + VAD)
+        { from: 'node_modules/@jitsi/rnnoise-wasm/dist/rnnoise.wasm', to: 'background/' },
       ],
     }),
   ],

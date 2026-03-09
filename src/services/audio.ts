@@ -1,6 +1,7 @@
 import { PeerConnection } from './peer-connection';
 import { SignalingService, SignalMessage } from './signaling';
 import { AudioSettings } from '../core/types';
+import { createRnnoiseNode, RnnoiseNode } from './rnnoise';
 
 export class AudioService {
   private localStream: MediaStream | null = null;
@@ -17,16 +18,18 @@ export class AudioService {
     playerVolumes: {},
   };
 
-  // VAD state
+  // Audio processing state
   private audioContext: AudioContext | null = null;
-  private analyser: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
   private outputStream: MediaStream | null = null;
-  private vadBuffer: Uint8Array<ArrayBuffer> | null = null;
+  private rnnoiseNode: RnnoiseNode | null = null;
   private vadActive = false;
 
   // PTT state
   private pttHeld = false;
+
+  // VAD polling (reads RNNoise VAD score periodically)
+  private vadPollId: number | null = null;
 
   constructor(signaling: SignalingService, localName: string) {
     this.signaling = signaling;
@@ -37,29 +40,46 @@ export class AudioService {
     this.localStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
-        noiseSuppression: true,
+        noiseSuppression: false, // RNNoise replaces browser noise suppression
         autoGainControl: true,
       },
     });
 
-    // Set up VAD analyser with input gain
     this.audioContext = new AudioContext();
-    // Resume if suspended (created without user gesture in Overwolf background)
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
     const source = this.audioContext.createMediaStreamSource(this.localStream);
     this.gainNode = this.audioContext.createGain();
     this.gainNode.gain.value = this.settings.inputVolume;
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 512;
-    this.vadBuffer = new Uint8Array(this.analyser.frequencyBinCount);
-    source.connect(this.gainNode);
-    this.gainNode.connect(this.analyser);
     const destination = this.audioContext.createMediaStreamDestination();
-    this.gainNode.connect(destination);
+
+    // Try to load RNNoise for noise suppression + VAD
+    try {
+      this.rnnoiseNode = await createRnnoiseNode(this.audioContext);
+      // Chain: mic → gain → rnnoise → destination
+      source.connect(this.gainNode);
+      this.gainNode.connect(this.rnnoiseNode.scriptNode);
+      this.rnnoiseNode.scriptNode.connect(destination);
+      console.log('[Audio] RNNoise loaded — noise suppression + VAD active');
+
+      // Poll RNNoise VAD score at ~20Hz
+      this.vadPollId = window.setInterval(() => {
+        if (!this.rnnoiseNode || this.settings.inputMode !== 'vad') return;
+        const wasActive = this.vadActive;
+        this.vadActive = this.rnnoiseNode.getVadScore() > 0.5;
+        if (this.vadActive !== wasActive) {
+          this.updateLocalTrackState();
+        }
+      }, 50) as unknown as number;
+    } catch (e) {
+      // Fallback: no RNNoise, use browser built-in noiseSuppression
+      console.warn('[Audio] RNNoise failed to load, falling back to browser noise suppression:', e);
+      source.connect(this.gainNode);
+      this.gainNode.connect(destination);
+    }
+
     this.outputStream = destination.stream;
-    // Ensure output tracks start enabled
     for (const track of this.outputStream.getAudioTracks()) {
       track.enabled = true;
     }
@@ -85,22 +105,7 @@ export class AudioService {
     }
   }
 
-  // Called periodically (~20 times/sec) to check voice activity
-  private vadLogCounter = 0;
-  updateVAD(): void {
-    if (this.settings.inputMode !== 'vad' || !this.analyser || !this.vadBuffer) return;
-    const data = this.vadBuffer;
-    this.analyser.getByteFrequencyData(data);
-    const average = data.reduce((sum, val) => sum + val, 0) / data.length;
-    const threshold = 15; // Lower threshold for easier voice detection
-    const wasActive = this.vadActive;
-    this.vadActive = average > threshold;
-    this.vadLogCounter++;
-    // Only update track state when VAD state changes to reduce toggling
-    if (this.vadActive !== wasActive) {
-      this.updateLocalTrackState();
-    }
-  }
+  // VAD is now handled by RNNoise polling in initMicrophone (no external call needed)
 
   // Connect to a new peer
   async connectToPeer(remoteName: string, isInitiator?: boolean): Promise<void> {
@@ -282,6 +287,12 @@ export class AudioService {
       peer.close();
     }
     this.peers.clear();
+    if (this.vadPollId !== null) {
+      clearInterval(this.vadPollId);
+      this.vadPollId = null;
+    }
+    this.rnnoiseNode?.destroy();
+    this.rnnoiseNode = null;
     this.outputStream?.getTracks().forEach((t) => t.stop());
     this.outputStream = null;
     this.localStream?.getTracks().forEach((t) => t.stop());
