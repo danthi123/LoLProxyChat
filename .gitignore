@@ -20,3 +20,6 @@ models/*.pt
 # Temp/logs
 logs.txt
 supabase/.temp/
+
+# Lock files (legacy practice — npm regenerates on install)
+package-lock.json
